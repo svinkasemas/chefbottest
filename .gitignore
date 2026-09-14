@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+.env
+database.db
+.dev-tunnel.log
+.dev-tunnel.log.err
+.dev-tunnel-state.json
+tools/

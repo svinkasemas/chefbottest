@@ -1,0 +1,372 @@
+{
+  "categories": [
+    {"key": "soups", "name": "Первые блюда", "emoji": "🥣", "color": "#B5462F", "sort_order": 1},
+    {"key": "mains", "name": "Вторые блюда", "emoji": "🍗", "color": "#C97A1F", "sort_order": 2},
+    {"key": "salads", "name": "Салаты", "emoji": "🥗", "color": "#5C7A4E", "sort_order": 3},
+    {"key": "baking", "name": "Выпечка", "emoji": "🥐", "color": "#D9A62E", "sort_order": 4},
+    {"key": "desserts", "name": "Десерты", "emoji": "🍰", "color": "#A9557C", "sort_order": 5},
+    {"key": "drinks", "name": "Напитки", "emoji": "🥤", "color": "#3E7C8C", "sort_order": 6}
+  ],
+  "recipes": [
+    {
+      "category": "soups", "name": "Борщ украинский", "time_minutes": 90, "difficulty": 3,
+      "calories": 250, "price_level": "Недорого", "cuisine": "Украинская", "base_portions": 4,
+      "description": "Классический наваристый борщ со свёклой и капустой.",
+      "ingredients": [
+        {"name": "говядина", "amount": 500, "unit": "г"},
+        {"name": "картофель", "amount": 4, "unit": "шт."},
+        {"name": "капуста белокочанная", "amount": 400, "unit": "г"},
+        {"name": "свёкла", "amount": 2, "unit": "шт."},
+        {"name": "морковь", "amount": 1, "unit": "шт."},
+        {"name": "лук репчатый", "amount": 1, "unit": "шт."},
+        {"name": "томатная паста", "amount": 2, "unit": "ст.л."},
+        {"name": "чеснок", "amount": 3, "unit": "зубчика"},
+        {"name": "соль", "amount": 1, "unit": "по вкусу"},
+        {"name": "лавровый лист", "amount": 2, "unit": "шт."}
+      ],
+      "steps": [
+        {"text": "Поставьте мясо вариться в подсоленной воде до готовности.", "timer_minutes": 45},
+        {"text": "Почистите и нарежьте овощи.", "timer_minutes": null},
+        {"text": "Добавьте в бульон нарезанный картофель.", "timer_minutes": 10},
+        {"text": "Обжарьте лук, морковь и свёклу с томатной пастой.", "timer_minutes": 10},
+        {"text": "Добавьте капусту и зажарку в кастрюлю, варите до готовности.", "timer_minutes": 15},
+        {"text": "В конце добавьте чеснок, лавровый лист и соль. Дайте настояться 10 минут.", "timer_minutes": 10}
+      ]
+    },
+    {
+      "category": "soups", "name": "Куриный суп с лапшой", "time_minutes": 40, "difficulty": 1,
+      "calories": 150, "price_level": "Эконом", "cuisine": "Русская", "base_portions": 4,
+      "description": "Лёгкий домашний суп на курином бульоне.",
+      "ingredients": [
+        {"name": "курица", "amount": 400, "unit": "г"},
+        {"name": "картофель", "amount": 3, "unit": "шт."},
+        {"name": "морковь", "amount": 1, "unit": "шт."},
+        {"name": "лук репчатый", "amount": 1, "unit": "шт."},
+        {"name": "лапша", "amount": 100, "unit": "г"},
+        {"name": "соль", "amount": 1, "unit": "по вкусу"},
+        {"name": "зелень", "amount": 1, "unit": "пучок"}
+      ],
+      "steps": [
+        {"text": "Сварите куриный бульон.", "timer_minutes": 30},
+        {"text": "Добавьте нарезанный картофель, морковь и лук.", "timer_minutes": 10},
+        {"text": "Всыпьте лапшу и варите ещё 5 минут.", "timer_minutes": 5},
+        {"text": "Посолите, посыпьте зеленью перед подачей.", "timer_minutes": null}
+      ]
+    },
+    {
+      "category": "soups", "name": "Грибной суп-пюре", "time_minutes": 35, "difficulty": 2,
+      "calories": 180, "price_level": "Недорого", "cuisine": "Европейская", "base_portions": 4,
+      "description": "Нежный крем-суп из шампиньонов со сливками.",
+      "ingredients": [
+        {"name": "грибы шампиньоны", "amount": 500, "unit": "г"},
+        {"name": "картофель", "amount": 2, "unit": "шт."},
+        {"name": "лук репчатый", "amount": 1, "unit": "шт."},
+        {"name": "сливки", "amount": 200, "unit": "мл"},
+        {"name": "масло сливочное", "amount": 30, "unit": "г"},
+        {"name": "соль", "amount": 1, "unit": "по вкусу"}
+      ],
+      "steps": [
+        {"text": "Обжарьте лук и грибы на сливочном масле.", "timer_minutes": 10},
+        {"text": "Добавьте картофель и воду, варите до мягкости.", "timer_minutes": 15},
+        {"text": "Пробейте блендером до однородности, добавьте сливки.", "timer_minutes": 5},
+        {"text": "Прогрейте, не доводя до кипения, посолите по вкусу.", "timer_minutes": 5}
+      ]
+    },
+    {
+      "category": "soups", "name": "Гороховый суп с копчёностями", "time_minutes": 70, "difficulty": 2,
+      "calories": 220, "price_level": "Недорого", "cuisine": "Русская", "base_portions": 4,
+      "description": "Сытный суп на копчёных рёбрышках с горохом.",
+      "ingredients": [
+        {"name": "горох колотый", "amount": 300, "unit": "г"},
+        {"name": "копчёности", "amount": 300, "unit": "г"},
+        {"name": "картофель", "amount": 3, "unit": "шт."},
+        {"name": "морковь", "amount": 1, "unit": "шт."},
+        {"name": "лук репчатый", "amount": 1, "unit": "шт."},
+        {"name": "соль", "amount": 1, "unit": "по вкусу"}
+      ],
+      "steps": [
+        {"text": "Замочите горох на пару часов заранее.", "timer_minutes": null},
+        {"text": "Сварите горох в бульоне с копчёностями.", "timer_minutes": 40},
+        {"text": "Добавьте картофель, морковь и лук.", "timer_minutes": 15},
+        {"text": "Варите до готовности овощей, посолите.", "timer_minutes": 10}
+      ]
+    },
+    {
+      "category": "soups", "name": "Солянка сборная мясная", "time_minutes": 60, "difficulty": 3,
+      "calories": 240, "price_level": "Средне", "cuisine": "Русская", "base_portions": 4,
+      "description": "Острый наваристый суп с копчёностями, оливками и лимоном.",
+      "ingredients": [
+        {"name": "копчёности", "amount": 300, "unit": "г"},
+        {"name": "колбаса варёная", "amount": 200, "unit": "г"},
+        {"name": "огурцы солёные", "amount": 3, "unit": "шт."},
+        {"name": "оливки", "amount": 100, "unit": "г"},
+        {"name": "лук репчатый", "amount": 1, "unit": "шт."},
+        {"name": "томатная паста", "amount": 2, "unit": "ст.л."},
+        {"name": "лимон", "amount": 0.5, "unit": "шт."}
+      ],
+      "steps": [
+        {"text": "Обжарьте лук с томатной пастой.", "timer_minutes": 5},
+        {"text": "Нарежьте мясные продукты и огурцы.", "timer_minutes": null},
+        {"text": "Сварите бульон, добавьте все ингредиенты.", "timer_minutes": 20},
+        {"text": "Добавьте оливки и дольку лимона перед подачей.", "timer_minutes": 5}
+      ]
+    },
+    {
+      "category": "mains", "name": "Курица с картофелем в духовке", "time_minutes": 60, "difficulty": 2,
+      "calories": 320, "price_level": "Недорого", "cuisine": "Русская", "base_portions": 4,
+      "description": "Сочная курица, запечённая с картофелем и специями.",
+      "ingredients": [
+        {"name": "курица", "amount": 1000, "unit": "г"},
+        {"name": "картофель", "amount": 6, "unit": "шт."},
+        {"name": "чеснок", "amount": 4, "unit": "зубчика"},
+        {"name": "масло растительное", "amount": 3, "unit": "ст.л."},
+        {"name": "специи для курицы", "amount": 1, "unit": "ст.л."},
+        {"name": "соль", "amount": 1, "unit": "по вкусу"}
+      ],
+      "steps": [
+        {"text": "Натрите курицу специями, солью и чесноком.", "timer_minutes": null},
+        {"text": "Нарежьте картофель крупными дольками, смешайте с маслом.", "timer_minutes": null},
+        {"text": "Выложите курицу и картофель на противень.", "timer_minutes": null},
+        {"text": "Запекайте в духовке при 200°C.", "timer_minutes": 50}
+      ]
+    },
+    {
+      "category": "mains", "name": "Котлеты из говяжьего фарша", "time_minutes": 40, "difficulty": 2,
+      "calories": 280, "price_level": "Недорого", "cuisine": "Русская", "base_portions": 4,
+      "description": "Классические сочные котлеты с луком.",
+      "ingredients": [
+        {"name": "фарш говяжий", "amount": 500, "unit": "г"},
+        {"name": "лук репчатый", "amount": 1, "unit": "шт."},
+        {"name": "яйцо куриное", "amount": 1, "unit": "шт."},
+        {"name": "батон", "amount": 100, "unit": "г"},
+        {"name": "молоко", "amount": 100, "unit": "мл"},
+        {"name": "соль", "amount": 1, "unit": "по вкусу"},
+        {"name": "масло растительное", "amount": 3, "unit": "ст.л."}
+      ],
+      "steps": [
+        {"text": "Замочите батон в молоке.", "timer_minutes": 10},
+        {"text": "Смешайте фарш, лук, яйцо, отжатый батон, соль.", "timer_minutes": null},
+        {"text": "Сформируйте котлеты.", "timer_minutes": null},
+        {"text": "Обжарьте на сковороде с двух сторон до готовности.", "timer_minutes": 15}
+      ]
+    },
+    {
+      "category": "mains", "name": "Плов с курицей", "time_minutes": 60, "difficulty": 3,
+      "calories": 350, "price_level": "Недорого", "cuisine": "Узбекская", "base_portions": 4,
+      "description": "Рассыпчатый плов с курицей и морковью.",
+      "ingredients": [
+        {"name": "рис", "amount": 400, "unit": "г"},
+        {"name": "курица", "amount": 500, "unit": "г"},
+        {"name": "морковь", "amount": 2, "unit": "шт."},
+        {"name": "лук репчатый", "amount": 1, "unit": "шт."},
+        {"name": "чеснок", "amount": 1, "unit": "головка"},
+        {"name": "масло растительное", "amount": 100, "unit": "мл"},
+        {"name": "зира", "amount": 1, "unit": "ч.л."},
+        {"name": "соль", "amount": 1, "unit": "по вкусу"}
+      ],
+      "steps": [
+        {"text": "Обжарьте курицу до золотистой корочки.", "timer_minutes": 10},
+        {"text": "Добавьте лук и морковь, обжарьте.", "timer_minutes": 10},
+        {"text": "Всыпьте промытый рис, залейте водой, добавьте специи и чеснок.", "timer_minutes": null},
+        {"text": "Томите под крышкой на медленном огне до готовности риса.", "timer_minutes": 30}
+      ]
+    },
+    {
+      "category": "mains", "name": "Паста карбонара", "time_minutes": 25, "difficulty": 2,
+      "calories": 400, "price_level": "Средне", "cuisine": "Итальянская", "base_portions": 4,
+      "description": "Классическая паста с беконом и сливочно-сырным соусом.",
+      "ingredients": [
+        {"name": "спагетти", "amount": 400, "unit": "г"},
+        {"name": "бекон", "amount": 200, "unit": "г"},
+        {"name": "яйцо куриное", "amount": 3, "unit": "шт."},
+        {"name": "сыр пармезан", "amount": 100, "unit": "г"},
+        {"name": "чеснок", "amount": 2, "unit": "зубчика"}
+      ],
+      "steps": [
+        {"text": "Отварите спагетти в подсоленной воде до готовности.", "timer_minutes": 10},
+        {"text": "Обжарьте бекон с чесноком до хруста.", "timer_minutes": 7},
+        {"text": "Смешайте яйца с тёртым пармезаном.", "timer_minutes": null},
+        {"text": "Смешайте горячие спагетти с беконом и яичной смесью вне огня.", "timer_minutes": 3}
+      ]
+    },
+    {
+      "category": "mains", "name": "Драники картофельные", "time_minutes": 30, "difficulty": 1,
+      "calories": 260, "price_level": "Эконом", "cuisine": "Белорусская", "base_portions": 4,
+      "description": "Хрустящие картофельные оладьи со сметаной.",
+      "ingredients": [
+        {"name": "картофель", "amount": 800, "unit": "г"},
+        {"name": "лук репчатый", "amount": 1, "unit": "шт."},
+        {"name": "яйцо куриное", "amount": 1, "unit": "шт."},
+        {"name": "мука", "amount": 2, "unit": "ст.л."},
+        {"name": "соль", "amount": 1, "unit": "по вкусу"},
+        {"name": "масло растительное", "amount": 4, "unit": "ст.л."}
+      ],
+      "steps": [
+        {"text": "Натрите картофель и лук на мелкой тёрке.", "timer_minutes": null},
+        {"text": "Добавьте яйцо, муку, соль, перемешайте.", "timer_minutes": null},
+        {"text": "Жарьте на раскалённой сковороде с двух сторон.", "timer_minutes": 15}
+      ]
+    },
+    {
+      "category": "salads", "name": "Оливье классический", "time_minutes": 40, "difficulty": 2,
+      "calories": 210, "price_level": "Недорого", "cuisine": "Русская", "base_portions": 6,
+      "description": "Праздничный салат с колбасой, картофелем и майонезом.",
+      "ingredients": [
+        {"name": "картофель", "amount": 4, "unit": "шт."},
+        {"name": "морковь", "amount": 2, "unit": "шт."},
+        {"name": "колбаса варёная", "amount": 300, "unit": "г"},
+        {"name": "яйцо куриное", "amount": 4, "unit": "шт."},
+        {"name": "огурцы солёные", "amount": 3, "unit": "шт."},
+        {"name": "горошек зелёный консервированный", "amount": 200, "unit": "г"},
+        {"name": "майонез", "amount": 150, "unit": "г"}
+      ],
+      "steps": [
+        {"text": "Отварите картофель, морковь и яйца.", "timer_minutes": 25},
+        {"text": "Нарежьте все ингредиенты кубиком.", "timer_minutes": 15},
+        {"text": "Смешайте с горошком и майонезом.", "timer_minutes": 5}
+      ]
+    },
+    {
+      "category": "salads", "name": "Греческий салат", "time_minutes": 15, "difficulty": 1,
+      "calories": 180, "price_level": "Средне", "cuisine": "Греческая", "base_portions": 4,
+      "description": "Свежий салат с сыром фета и оливками.",
+      "ingredients": [
+        {"name": "помидоры", "amount": 3, "unit": "шт."},
+        {"name": "огурцы", "amount": 2, "unit": "шт."},
+        {"name": "перец болгарский", "amount": 1, "unit": "шт."},
+        {"name": "сыр фета", "amount": 150, "unit": "г"},
+        {"name": "оливки", "amount": 100, "unit": "г"},
+        {"name": "лук красный", "amount": 0.5, "unit": "шт."},
+        {"name": "масло оливковое", "amount": 3, "unit": "ст.л."}
+      ],
+      "steps": [
+        {"text": "Нарежьте овощи крупными кусочками.", "timer_minutes": 10},
+        {"text": "Добавьте оливки и нарезанную кубиками фету.", "timer_minutes": null},
+        {"text": "Заправьте оливковым маслом.", "timer_minutes": 5}
+      ]
+    },
+    {
+      "category": "salads", "name": "Салат с курицей и ананасом", "time_minutes": 25, "difficulty": 1,
+      "calories": 200, "price_level": "Недорого", "cuisine": "Русская", "base_portions": 4,
+      "description": "Лёгкий салат с сочетанием курицы, ананаса и сыра.",
+      "ingredients": [
+        {"name": "курица", "amount": 300, "unit": "г"},
+        {"name": "ананас консервированный", "amount": 200, "unit": "г"},
+        {"name": "сыр твёрдый", "amount": 150, "unit": "г"},
+        {"name": "майонез", "amount": 100, "unit": "г"}
+      ],
+      "steps": [
+        {"text": "Отварите и нарежьте курицу.", "timer_minutes": 20},
+        {"text": "Нарежьте ананас и натрите сыр.", "timer_minutes": 5},
+        {"text": "Выложите слоями, промазывая майонезом.", "timer_minutes": 5}
+      ]
+    },
+    {
+      "category": "baking", "name": "Пицца домашняя", "time_minutes": 50, "difficulty": 3,
+      "calories": 280, "price_level": "Недорого", "cuisine": "Итальянская", "base_portions": 4,
+      "description": "Пицца с колбасой, сыром и томатным соусом на домашнем тесте.",
+      "ingredients": [
+        {"name": "мука", "amount": 300, "unit": "г"},
+        {"name": "дрожжи сухие", "amount": 5, "unit": "г"},
+        {"name": "вода", "amount": 180, "unit": "мл"},
+        {"name": "соус томатный", "amount": 100, "unit": "г"},
+        {"name": "сыр моцарелла", "amount": 200, "unit": "г"},
+        {"name": "колбаса варёная", "amount": 150, "unit": "г"},
+        {"name": "масло растительное", "amount": 2, "unit": "ст.л."}
+      ],
+      "steps": [
+        {"text": "Замесите тесто из муки, дрожжей, воды и масла.", "timer_minutes": 10},
+        {"text": "Дайте тесту подойти в тёплом месте.", "timer_minutes": 40},
+        {"text": "Раскатайте тесто, смажьте соусом, выложите начинку и сыр.", "timer_minutes": 10},
+        {"text": "Выпекайте при 220°C до золотистой корочки.", "timer_minutes": 15}
+      ]
+    },
+    {
+      "category": "baking", "name": "Пирожки с картошкой", "time_minutes": 90, "difficulty": 3,
+      "calories": 220, "price_level": "Эконом", "cuisine": "Русская", "base_portions": 8,
+      "description": "Домашние жареные пирожки с картофельной начинкой.",
+      "ingredients": [
+        {"name": "мука", "amount": 500, "unit": "г"},
+        {"name": "дрожжи сухие", "amount": 7, "unit": "г"},
+        {"name": "молоко", "amount": 250, "unit": "мл"},
+        {"name": "картофель", "amount": 600, "unit": "г"},
+        {"name": "лук репчатый", "amount": 1, "unit": "шт."},
+        {"name": "масло растительное", "amount": 100, "unit": "мл"},
+        {"name": "соль", "amount": 1, "unit": "по вкусу"}
+      ],
+      "steps": [
+        {"text": "Замесите дрожжевое тесто, дайте подойти.", "timer_minutes": 60},
+        {"text": "Сварите и разомните картофель в пюре, добавьте обжаренный лук.", "timer_minutes": 25},
+        {"text": "Сформируйте пирожки с начинкой.", "timer_minutes": 20},
+        {"text": "Обжарьте пирожки на растительном масле до золотистого цвета.", "timer_minutes": 15}
+      ]
+    },
+    {
+      "category": "desserts", "name": "Шарлотка с яблоками", "time_minutes": 50, "difficulty": 1,
+      "calories": 230, "price_level": "Эконом", "cuisine": "Русская", "base_portions": 6,
+      "description": "Простой пышный пирог с яблоками.",
+      "ingredients": [
+        {"name": "яблоки", "amount": 4, "unit": "шт."},
+        {"name": "мука", "amount": 200, "unit": "г"},
+        {"name": "сахар", "amount": 200, "unit": "г"},
+        {"name": "яйцо куриное", "amount": 4, "unit": "шт."},
+        {"name": "разрыхлитель", "amount": 1, "unit": "ч.л."}
+      ],
+      "steps": [
+        {"text": "Взбейте яйца с сахаром до пышной пены.", "timer_minutes": 5},
+        {"text": "Добавьте муку с разрыхлителем, аккуратно перемешайте.", "timer_minutes": 5},
+        {"text": "Выложите нарезанные яблоки в форму, залейте тестом.", "timer_minutes": null},
+        {"text": "Выпекайте при 180°C.", "timer_minutes": 40}
+      ]
+    },
+    {
+      "category": "desserts", "name": "Тирамису классический", "time_minutes": 30, "difficulty": 3,
+      "calories": 350, "price_level": "Средне", "cuisine": "Итальянская", "base_portions": 6,
+      "description": "Нежный десерт с сыром маскарпоне и кофейной пропиткой.",
+      "ingredients": [
+        {"name": "сыр маскарпоне", "amount": 500, "unit": "г"},
+        {"name": "печенье савоярди", "amount": 200, "unit": "г"},
+        {"name": "кофе крепкий", "amount": 300, "unit": "мл"},
+        {"name": "сахар", "amount": 100, "unit": "г"},
+        {"name": "какао порошок", "amount": 2, "unit": "ст.л."}
+      ],
+      "steps": [
+        {"text": "Сварите крепкий кофе и остудите.", "timer_minutes": 10},
+        {"text": "Смешайте маскарпоне с сахаром до однородности.", "timer_minutes": 5},
+        {"text": "Обмакните печенье в кофе и выложите слоем, чередуя с кремом.", "timer_minutes": 10},
+        {"text": "Уберите в холодильник, посыпьте какао перед подачей.", "timer_minutes": 120}
+      ]
+    },
+    {
+      "category": "drinks", "name": "Морс клюквенный", "time_minutes": 20, "difficulty": 1,
+      "calories": 60, "price_level": "Эконом", "cuisine": "Русская", "base_portions": 4,
+      "description": "Освежающий домашний морс из клюквы.",
+      "ingredients": [
+        {"name": "клюква", "amount": 300, "unit": "г"},
+        {"name": "сахар", "amount": 100, "unit": "г"},
+        {"name": "вода", "amount": 1500, "unit": "мл"}
+      ],
+      "steps": [
+        {"text": "Разомните клюкву и отожмите сок через марлю.", "timer_minutes": 10},
+        {"text": "Оставшийся жмых залейте водой, доведите до кипения, добавьте сахар.", "timer_minutes": 5},
+        {"text": "Смешайте отвар с соком, остудите.", "timer_minutes": 5}
+      ]
+    },
+    {
+      "category": "drinks", "name": "Глинтвейн безалкогольный", "time_minutes": 20, "difficulty": 1,
+      "calories": 90, "price_level": "Недорого", "cuisine": "Европейская", "base_portions": 4,
+      "description": "Согревающий напиток на основе сока с пряностями.",
+      "ingredients": [
+        {"name": "сок виноградный", "amount": 1000, "unit": "мл"},
+        {"name": "апельсин", "amount": 1, "unit": "шт."},
+        {"name": "корица", "amount": 1, "unit": "палочка"},
+        {"name": "гвоздика", "amount": 4, "unit": "шт."},
+        {"name": "мёд", "amount": 2, "unit": "ст.л."}
+      ],
+      "steps": [
+        {"text": "Нагрейте сок с пряностями и дольками апельсина, не доводя до кипения.", "timer_minutes": 15},
+        {"text": "Добавьте мёд и дайте настояться.", "timer_minutes": 5}
+      ]
+    }
+  ]
+}

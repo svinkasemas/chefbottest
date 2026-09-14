@@ -1,0 +1,40 @@
+"""
+Конфигурация RecipeApp backend.
+Чувствительные данные читаются из переменных окружения (.env).
+"""
+import os
+from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent  # корень проекта RecipeApp/
+
+# --- Telegram ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_TOKEN_HERE")
+ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+
+# Прокси для подключения бота к api.telegram.org — нужен, если провайдер
+# блокирует/режет доступ к этому домену напрямую. Полный URL со схемой,
+# например: http://логин:пароль@хост:порт или socks5://логин:пароль@хост:порт
+# Если не задан — бот подключается напрямую, без прокси.
+PROXY_URL = os.getenv("PROXY_URL", "").strip() or None
+
+# Разрешить работу без проверки подписи Telegram (ТОЛЬКО для локальной разработки
+# в браузере, где нет initData). На проде должно быть False.
+DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
+
+# --- База данных ---
+DB_PATH = BASE_DIR / "database.db"
+DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
+
+# --- Папки ---
+PHOTOS_DIR = BASE_DIR / "webapp" / "photos"
+DATA_DIR = BASE_DIR / "data"
+WEBAPP_DIR = BASE_DIR / "webapp"
+
+for d in (PHOTOS_DIR, DATA_DIR):
+    d.mkdir(parents=True, exist_ok=True)
+
+# --- CORS (для локальной разработки фронтенда отдельно от бэкенда) ---
+CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
+
+DEFAULT_PORTIONS = 4
+PORTIONS_OPTIONS = [2, 4, 6, 8]
