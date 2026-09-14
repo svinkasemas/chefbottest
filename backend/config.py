@@ -1,3 +1,6 @@
+from dotenv import load_dotenv
+load_dotenv()
+
 """
 Конфигурация RecipeApp backend.
 Чувствительные данные читаются из переменных окружения (.env).
