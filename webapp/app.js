@@ -141,10 +141,21 @@ function capitalize(s) {
 
 const STARS = { 1: "★☆☆☆☆", 2: "★★☆☆☆", 3: "★★★☆☆", 4: "★★★★☆", 5: "★★★★★" };
 
+function recipeMediaHtml(r) {
+  if (r.photo_url) {
+    return `<span class="recipe-media">
+      <img class="recipe-card-photo" src="${escapeHtml(r.photo_url)}" alt="" loading="lazy"
+           onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+      <span class="recipe-emoji" style="display:none">${r.emoji || "🍽"}</span>
+    </span>`;
+  }
+  return `<span class="recipe-media"><span class="recipe-emoji">${r.emoji || "🍽"}</span></span>`;
+}
+
 function recipeCardHtml(r) {
   return `
     <button class="recipe-card" data-recipe-id="${r.id}">
-      <span class="recipe-emoji">${r.emoji || "🍽"}</span>
+      ${recipeMediaHtml(r)}
       <span class="recipe-card-body">
         <span class="recipe-card-name">${escapeHtml(r.name)}</span>
         <span class="recipe-card-meta">
@@ -332,7 +343,7 @@ const SCREENS = {
         .map(
           (m) => `
         <button class="recipe-card" data-recipe-id="${m.recipe.id}">
-          <span class="recipe-emoji">${m.recipe.emoji}</span>
+          ${recipeMediaHtml(m.recipe)}
           <span class="recipe-card-body">
             <span class="recipe-card-name">${escapeHtml(m.recipe.name)}</span>
             <span class="recipe-card-meta"><span>⏱ ${m.recipe.time_minutes} мин</span></span>
@@ -358,6 +369,16 @@ const SCREENS = {
 
     function paintRecipe(recipe) {
       document.getElementById("recipe-title").textContent = recipe.name;
+
+      const heroPhoto = document.getElementById("recipe-hero-photo");
+      if (recipe.photo_url) {
+        heroPhoto.innerHTML = `<img src="${escapeHtml(recipe.photo_url)}" alt="" loading="lazy"
+          onerror="this.closest('.recipe-hero-photo').hidden = true;">`;
+        heroPhoto.hidden = false;
+      } else {
+        heroPhoto.hidden = true;
+        heroPhoto.innerHTML = "";
+      }
 
       const favBtn = document.getElementById("recipe-fav-btn");
       favBtn.textContent = recipe.is_favorite ? "❤️" : "🤍";

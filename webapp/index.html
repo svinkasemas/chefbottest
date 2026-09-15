@@ -6,7 +6,7 @@
 <title>ChefBot — кухонный помощник</title>
 
 
-<link rel="stylesheet" href="styles.css" />
+<link rel="stylesheet" href="styles.css?v=2" />
 <script src="/telegram-web-app.js"></script>
 </head>
 <body>
@@ -93,6 +93,7 @@
       <button class="icon-btn icon-btn--ghost" id="recipe-fav-btn" aria-label="В избранное">🤍</button>
     </header>
 
+    <div class="recipe-hero-photo" id="recipe-hero-photo" hidden></div>
     <div class="recipe-meta" id="recipe-meta"></div>
     <p class="recipe-description" id="recipe-description"></p>
 
@@ -131,6 +132,6 @@
     <button class="btn btn--ghost btn--block" id="clear-checked-btn">🗑 Очистить купленное</button>
   </template>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=2"></script>
 </body>
 </html>

@@ -68,6 +68,14 @@ app.add_middleware(
 )
 
 
+def photo_url_for(recipe) -> str | None:
+    if not recipe.photo_path:
+        return None
+    if recipe.photo_path.startswith("http"):
+        return recipe.photo_path
+    return f"/photos/{recipe.photo_path}"
+
+
 def recipe_to_short(recipe, favorite_ids: set[int]) -> RecipeShort:
     return RecipeShort(
         id=recipe.id,
@@ -78,6 +86,7 @@ def recipe_to_short(recipe, favorite_ids: set[int]) -> RecipeShort:
         price_level=recipe.price_level,
         calories=recipe.calories,
         is_favorite=recipe.id in favorite_ids,
+        photo_url=photo_url_for(recipe),
     )
 
 
@@ -172,6 +181,7 @@ async def api_recipe_detail(
         ingredients=ingredients,
         steps=steps,
         is_favorite=recipe.id in favorite_ids,
+        photo_url=photo_url_for(recipe),
     )
 
 

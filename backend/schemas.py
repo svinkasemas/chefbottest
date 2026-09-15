@@ -20,6 +20,7 @@ class RecipeShort(BaseModel):
     price_level: str
     calories: int
     is_favorite: bool = False
+    photo_url: str | None = None
 
 
 class IngredientOut(BaseModel):
@@ -52,6 +53,7 @@ class RecipeDetail(BaseModel):
     ingredients: list[IngredientOut]
     steps: list[StepOut]
     is_favorite: bool
+    photo_url: str | None = None
 
 
 class FridgeMatch(BaseModel):
