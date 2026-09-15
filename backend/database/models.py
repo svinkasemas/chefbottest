@@ -62,6 +62,8 @@ class Recipe(Base):
     category_id: Mapped[int] = mapped_column(ForeignKey("categories.id"))
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     photo_path: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    photo_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_ai_generated: Mapped[bool] = mapped_column(Boolean, default=False)
 
     time_minutes: Mapped[int] = mapped_column(Integer, default=30)
     difficulty: Mapped[int] = mapped_column(Integer, default=2)  # 1..5

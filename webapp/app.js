@@ -279,8 +279,30 @@ const SCREENS = {
       const recipes = await api(`/api/search?q=${encodeURIComponent(q)}`);
       results.innerHTML = recipes.length
         ? recipes.map(recipeCardHtml).join("")
-        : `<p class="empty-state">По запросу «${escapeHtml(q)}» ничего не нашлось 😕</p>`;
+        : `<p class="empty-state">По запросу «${escapeHtml(q)}» ничего не нашлось 😕</p>
+           <button class="btn btn--primary" id="ai-generate-btn" style="margin-top:12px">📖 Получить рецепт</button>`;
       wireRecipeCards(results);
+
+      const generateBtn = document.getElementById("ai-generate-btn");
+      if (generateBtn) {
+        generateBtn.onclick = async () => {
+          haptic();
+          generateBtn.disabled = true;
+          generateBtn.textContent = "Ищу рецепт... это может занять до минуты";
+          try {
+            const recipe = await api("/api/recipes/generate", {
+              method: "POST",
+              body: { name: q },
+            });
+            haptic("success");
+            render("recipe", { id: recipe.id });
+          } catch (e) {
+            flashToast("Не удалось сгенерировать рецепт 😕 Попробуйте ещё раз");
+            generateBtn.disabled = false;
+            generateBtn.textContent = "📖 Получить рецепт";
+          }
+        };
+      }
     }
   },
 

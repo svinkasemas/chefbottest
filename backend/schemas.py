@@ -76,6 +76,10 @@ class ToggleFavoriteIn(BaseModel):
     recipe_id: int
 
 
+class GenerateRecipeIn(BaseModel):
+    name: str
+
+
 class FridgeMatchIn(BaseModel):
     ingredients: list[str]
 

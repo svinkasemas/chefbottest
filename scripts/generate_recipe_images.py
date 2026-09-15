@@ -89,9 +89,10 @@ CURATED_VISUAL_DESCRIPTIONS: dict[str, str] = {
 
 
 def build_prompt(recipe: Recipe) -> str:
-    curated = CURATED_VISUAL_DESCRIPTIONS.get(recipe.name)
-    if curated:
-        visual = curated
+    if recipe.photo_prompt:
+        visual = recipe.photo_prompt
+    elif CURATED_VISUAL_DESCRIPTIONS.get(recipe.name):
+        visual = CURATED_VISUAL_DESCRIPTIONS[recipe.name]
     else:
         ingredient_names = [link.ingredient.name for link in recipe.ingredient_links[:4]]
         ingredients_part = f", made with {', '.join(ingredient_names)}" if ingredient_names else ""

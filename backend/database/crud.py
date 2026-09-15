@@ -13,6 +13,7 @@ from backend.database.models import (
     Ingredient,
     Recipe,
     RecipeIngredient,
+    RecipeStep,
     ShoppingListItem,
     User,
 )
@@ -48,6 +49,58 @@ async def get_or_create_ingredient(session: AsyncSession, name: str) -> Ingredie
         session.add(obj)
         await session.flush()
     return obj
+
+
+CATEGORY_KEY_TO_NAME = {
+    "soups": "Первые блюда",
+    "mains": "Вторые блюда",
+    "salads": "Салаты",
+    "baking": "Выпечка",
+    "desserts": "Десерты",
+    "drinks": "Напитки",
+}
+
+
+async def create_recipe_from_ai_data(session: AsyncSession, data: dict) -> Recipe:
+    """
+    Создаёт рецепт из JSON, полученного от ИИ (backend/ai_recipe.py),
+    той же схемы, что и data/seed_recipes.json, плюс поле photo_prompt.
+    Помечает рецепт как is_ai_generated=True.
+    """
+    category_name = CATEGORY_KEY_TO_NAME.get(data.get("category"), "Вторые блюда")
+    category = await get_or_create_category(session, category_name)
+
+    recipe = Recipe(
+        category_id=category.id,
+        name=data["name"],
+        photo_prompt=data.get("photo_prompt"),
+        time_minutes=data.get("time_minutes", 30),
+        difficulty=data.get("difficulty", 2),
+        calories=data.get("calories", 0),
+        price_level=data.get("price_level", "Недорого"),
+        cuisine=data.get("cuisine", "Русская"),
+        base_portions=data.get("base_portions", 4),
+        description=data.get("description", ""),
+        is_ai_generated=True,
+    )
+    session.add(recipe)
+    await session.flush()
+
+    for ing in data.get("ingredients", []):
+        ingredient = await get_or_create_ingredient(session, ing["name"])
+        session.add(RecipeIngredient(
+            recipe_id=recipe.id, ingredient_id=ingredient.id,
+            amount=ing.get("amount", 0), unit=ing.get("unit", ""),
+        ))
+
+    for i, step in enumerate(data.get("steps", []), start=1):
+        session.add(RecipeStep(
+            recipe_id=recipe.id, step_number=i,
+            text=step["text"], timer_minutes=step.get("timer_minutes"),
+        ))
+
+    await session.commit()
+    return recipe
 
 
 async def get_all_categories(session: AsyncSession) -> list[Category]:

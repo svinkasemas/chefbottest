@@ -31,6 +31,7 @@ from backend.schemas import (
     CategoryOut,
     FridgeMatch,
     FridgeMatchIn,
+    GenerateRecipeIn,
     IngredientOut,
     RecipeDetail,
     RecipeShort,
@@ -38,6 +39,7 @@ from backend.schemas import (
     StepOut,
     ToggleFavoriteIn,
 )
+from backend.ai_recipe import RecipeGenerationError, generate_recipe_dict
 from backend.utils import scale_amount
 
 # Небольшой предустановленный список продуктов для быстрого выбора в
@@ -199,6 +201,39 @@ async def api_search(
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
     recipes = await crud.search_recipes(db, q)
     return [recipe_to_short(r, favorite_ids) for r in recipes]
+
+
+@app.post("/api/recipes/generate", response_model=RecipeShort)
+async def api_generate_recipe(
+    payload: GenerateRecipeIn,
+    db: AsyncSession = Depends(get_db),
+    user: TelegramUser = Depends(get_current_user),
+):
+    import asyncio
+
+    dish_name = payload.name.strip()
+    if not dish_name:
+        raise HTTPException(400, "Название блюда не может быть пустым")
+
+    db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+    favorite_ids = await crud.get_favorite_ids(db, db_user.id)
+
+    # если рецепт с таким названием уже есть - не генерируем повторно
+    existing = await crud.search_recipes(db, dish_name, limit=5)
+    for r in existing:
+        if r.name.strip().lower() == dish_name.lower():
+            return recipe_to_short(r, favorite_ids)
+
+    try:
+        # generate_recipe_dict синхронный (requests) и может занимать до минуты -
+        # выносим в отдельный поток, чтобы не блокировать сервер для остальных пользователей
+        data = await asyncio.to_thread(generate_recipe_dict, dish_name)
+    except RecipeGenerationError as e:
+        raise HTTPException(502, str(e))
+
+    recipe = await crud.create_recipe_from_ai_data(db, data)
+    recipe_full = await crud.get_recipe_full(db, recipe.id)
+    return recipe_to_short(recipe_full, favorite_ids)
 
 
 # ---------------------------------------------------------------------------

@@ -20,6 +20,10 @@ ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().
 # Если не задан — бот подключается напрямую, без прокси.
 PROXY_URL = os.getenv("PROXY_URL", "").strip() or None
 
+# Для генерации рецептов через ИИ, если их нет в базе (см. backend/ai_recipe.py)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip() or None
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip() or None
+
 # Разрешить работу без проверки подписи Telegram (ТОЛЬКО для локальной разработки
 # в браузере, где нет initData). На проде должно быть False.
 DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
