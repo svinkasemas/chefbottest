@@ -228,6 +228,24 @@ async def get_all_ingredient_names(session: AsyncSession) -> list[str]:
     return [row[0] for row in result.all()]
 
 
+async def search_ingredient_names(session: AsyncSession, query: str, limit: int = 20) -> list[str]:
+    """
+    Ищет продукты по всей базе ингредиентов (не только по короткому списку
+    часто используемых) - для строки поиска в разделе "Мой холодильник".
+    База ингредиентов пополняется сама по себе с каждым новым рецептом
+    (см. get_or_create_ingredient), включая рецепты от ежедневной
+    ИИ-генерации, так что искать здесь можно и по недавно появившимся
+    продуктам.
+    """
+    result = await session.execute(
+        select(Ingredient.name)
+        .where(Ingredient.name.ilike(f"%{query.strip().lower()}%"))
+        .order_by(Ingredient.name)
+        .limit(limit)
+    )
+    return [row[0] for row in result.all()]
+
+
 async def find_recipes_by_available_ingredients(
     session: AsyncSession, available: set[str], limit: int = 30
 ) -> list[tuple[Recipe, int, int]]:
