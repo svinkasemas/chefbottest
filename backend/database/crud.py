@@ -118,6 +118,21 @@ async def find_similar_active_recipe(session: AsyncSession, name: str) -> Recipe
     return None
 
 
+def normalize_timer_minutes(value) -> int | None:
+    """
+    Приводит время таймера шага к целому числу минут (в базе и в схеме
+    ответа API оно хранится как int). Если ИИ вернул дробное значение
+    (например 0.5 для "разогрейте 30 секунд"), округляем и не даём
+    результату уйти в 0 - для шага с таймером минимум 1 минута.
+    """
+    if value is None:
+        return None
+    try:
+        return max(1, round(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
 async def create_recipe_from_ai_data(session: AsyncSession, data: dict) -> Recipe:
     """
     Создаёт рецепт из JSON, полученного от ИИ (backend/ai_recipe.py),
@@ -162,7 +177,7 @@ async def create_recipe_from_ai_data(session: AsyncSession, data: dict) -> Recip
     for i, step in enumerate(data.get("steps", []), start=1):
         session.add(RecipeStep(
             recipe_id=recipe.id, step_number=i,
-            text=step["text"], timer_minutes=step.get("timer_minutes"),
+            text=step["text"], timer_minutes=normalize_timer_minutes(step.get("timer_minutes")),
         ))
 
     await session.commit()
