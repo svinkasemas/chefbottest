@@ -218,11 +218,11 @@ async def api_generate_recipe(
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
 
-    # если рецепт с таким названием уже есть - не генерируем повторно
-    existing = await crud.search_recipes(db, dish_name, limit=5)
-    for r in existing:
-        if r.name.strip().lower() == dish_name.lower():
-            return recipe_to_short(r, favorite_ids)
+    # если рецепт с таким или похожим названием уже есть - не генерируем повторно
+    # (ловит и точные совпадения, и вариации вида "Рыба фугу" / "Рыба фугу в соевом соусе")
+    similar = await crud.find_similar_active_recipe(db, dish_name)
+    if similar is not None:
+        return recipe_to_short(similar, favorite_ids)
 
     try:
         # generate_recipe_dict синхронный (requests) и может занимать до минуты -
