@@ -19,7 +19,7 @@ import re
 
 import requests
 
-from backend.config import GEMINI_API_KEY, GROQ_API_KEY, PROXY_URL
+from backend.config import CEREBRAS_API_KEY, GEMINI_API_KEY, GROQ_API_KEY, NVIDIA_API_KEY, OPENROUTER_API_KEY, PROXY_URL
 
 logger = logging.getLogger("ai_recipe")
 
@@ -126,6 +126,76 @@ def call_groq(prompt: str, use_proxy: bool) -> str:
     return data["choices"][0]["message"]["content"]
 
 
+def call_cerebras(prompt: str, use_proxy: bool) -> str:
+    """
+    Cerebras даёт щедрый бесплатный тариф (~1 млн токенов/день, без карты) -
+    запасной провайдер на случай, если у Gemini и Groq кончился дневной лимит.
+    API полностью совместим с форматом OpenAI/Groq. Получить ключ:
+    https://cloud.cerebras.ai
+    """
+    if not CEREBRAS_API_KEY:
+        raise RecipeGenerationError("CEREBRAS_API_KEY не задан")
+    url = "https://api.cerebras.ai/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {CEREBRAS_API_KEY}"}
+    payload = {
+        "model": "llama-3.3-70b",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7,
+    }
+    response = requests.post(
+        url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy)
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data["choices"][0]["message"]["content"]
+
+
+def call_openrouter(prompt: str, use_proxy: bool) -> str:
+    """
+    OpenRouter даёт доступ к десяткам бесплатных моделей через один ключ.
+    Модель "openrouter/free" сама выбирает доступную бесплатную модель, так
+    что не нужно вручную следить, какая именно ещё не устарела/не убрана.
+    Получить ключ: https://openrouter.ai/keys
+    """
+    if not OPENROUTER_API_KEY:
+        raise RecipeGenerationError("OPENROUTER_API_KEY не задан")
+    url = "https://openrouter.ai/api/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
+    payload = {
+        "model": "openrouter/free",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7,
+    }
+    response = requests.post(
+        url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy)
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data["choices"][0]["message"]["content"]
+
+
+def call_nvidia(prompt: str, use_proxy: bool) -> str:
+    """
+    NVIDIA NIM - пробные бесплатные кредиты (без карты), API совместим
+    с форматом OpenAI. Получить ключ: https://build.nvidia.com
+    """
+    if not NVIDIA_API_KEY:
+        raise RecipeGenerationError("NVIDIA_API_KEY не задан")
+    url = "https://integrate.api.nvidia.com/v1/chat/completions"
+    headers = {"Authorization": f"Bearer {NVIDIA_API_KEY}"}
+    payload = {
+        "model": "meta/llama-3.1-70b-instruct",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7,
+    }
+    response = requests.post(
+        url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy)
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data["choices"][0]["message"]["content"]
+
+
 def generate_recipe_dict(dish_name: str) -> dict:
     """
     Пробует по очереди: Gemini напрямую, Gemini через прокси,
@@ -179,6 +249,12 @@ def _call_with_fallback(prompt: str, error_subject: str) -> dict:
         ("gemini", True, call_gemini),
         ("groq", False, call_groq),
         ("groq", True, call_groq),
+        ("cerebras", False, call_cerebras),
+        ("cerebras", True, call_cerebras),
+        ("openrouter", False, call_openrouter),
+        ("openrouter", True, call_openrouter),
+        ("nvidia", False, call_nvidia),
+        ("nvidia", True, call_nvidia),
     ]
     errors: list[str] = []
 
