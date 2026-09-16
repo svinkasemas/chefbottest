@@ -245,6 +245,15 @@ async def api_common_ingredients():
     return {"ingredients": COMMON_INGREDIENTS}
 
 
+@app.get("/api/ingredients/search")
+async def api_search_ingredients(q: str, db: AsyncSession = Depends(get_db)):
+    q = q.strip()
+    if not q:
+        return {"ingredients": []}
+    names = await crud.search_ingredient_names(db, q)
+    return {"ingredients": names}
+
+
 @app.post("/api/fridge/match", response_model=list[FridgeMatch])
 async def api_fridge_match(
     payload: FridgeMatchIn,
