@@ -158,7 +158,7 @@ async def admin_add_help(callback):
     text = (
         "Чтобы добавить рецепт, пришлите мне сообщением JSON вида:\n\n"
         f"<pre>{json.dumps(example, ensure_ascii=False, indent=2)}</pre>\n\n"
-        "category — ключ категории (soups, mains, salads, baking, desserts, drinks "
+        "category — ключ категории (soups, mains, salads, baking, desserts, drinks, sauces "
         "или новый — категория создастся автоматически)."
     )
     await callback.message.answer(text)
