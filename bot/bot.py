@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -37,10 +38,11 @@ from sqlalchemy import func, select
 
 load_dotenv()
 
-from backend.config import ADMIN_IDS, BOT_TOKEN, PROXY_URL  # noqa: E402
+from backend.config import ADMIN_IDS, BOT_TOKEN, PHOTOS_DIR, PROXY_URL  # noqa: E402
 from backend.database import crud  # noqa: E402
 from backend.database.db import async_session, init_db  # noqa: E402
 from backend.database.models import Favorite, Recipe, RecipeIngredient, RecipeStep, User  # noqa: E402
+from backend.recipe_import import RecipeImportError, download_image_bytes, import_recipe_from_url  # noqa: E402
 
 WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
 
@@ -113,7 +115,9 @@ async def admin_panel(message: Message):
         "/recipes_list — список рецептов с id\n"
         "/delete_recipe <id> — скрыть рецепт\n"
         "/broadcast <текст> — рассылка всем пользователям\n\n"
-        "Чтобы добавить рецепт — пришлите JSON-объект рецепта (см. кнопку ниже).",
+        "Чтобы добавить рецепт — пришлите JSON-объект рецепта (см. кнопку ниже), "
+        "или просто скиньте ссылку на рецепт с любого кулинарного сайта — рецепт "
+        "будет извлечён со страницы автоматически.",
         reply_markup=admin_kb(),
     )
 
@@ -302,6 +306,61 @@ async def try_add_recipe_json(message: Message):
         await session.commit()
 
     await message.answer(f"✅ Рецепт «{data['name']}» добавлен (id {recipe.id}).")
+
+
+@dp.message(F.text.regexp(r"^https?://\S+$"))
+async def try_add_recipe_from_url(message: Message):
+    """
+    Админ присылает отдельным сообщением ссылку на рецепт с внешнего сайта -
+    скачиваем страницу, просим ИИ извлечь из неё рецепт (не придумать, а
+    именно перенести реальные ингредиенты и шаги) и добавляем в базу.
+    Работает не только на конкретных сайтах, а на любой странице с текстовым
+    рецептом - но некоторые сайты блокируют автоматические запросы (защита
+    от ботов), тогда импорт с них не сработает.
+    """
+    if not is_admin(message.from_user.id):
+        return
+
+    url = message.text.strip()
+    status = await message.answer("🔎 Открываю страницу и извлекаю рецепт... это может занять до минуты.")
+
+    try:
+        data, image_url = await asyncio.to_thread(import_recipe_from_url, url)
+    except RecipeImportError as e:
+        await status.edit_text(f"Не удалось импортировать рецепт: {e}")
+        return
+    except Exception as e:
+        logger.exception("Ошибка импорта рецепта по ссылке %s", url)
+        await status.edit_text(f"Не удалось импортировать рецепт: {e}")
+        return
+
+    async with async_session() as session:
+        existing = await crud.find_similar_active_recipe(session, data["name"])
+        recipe = await crud.create_recipe_from_ai_data(session, data)
+
+    if existing is not None:
+        await status.edit_text(
+            f"Похожий рецепт «{recipe.name}» уже есть в базе (id {recipe.id}) — новый не создавал."
+        )
+        return
+
+    photo_note = "фото появится при следующей ночной генерации (04:00)"
+    if image_url:
+        try:
+            image_bytes = await asyncio.to_thread(download_image_bytes, image_url)
+            filename = f"recipe_{recipe.id}.jpg"
+            (PHOTOS_DIR / filename).write_bytes(image_bytes)
+            async with async_session() as session:
+                db_recipe = await session.get(Recipe, recipe.id)
+                db_recipe.photo_path = filename
+                await session.commit()
+            photo_note = "фото взято с исходной страницы"
+        except Exception as e:
+            logger.warning("Не удалось скачать фото рецепта с %s: %s", image_url, e)
+
+    await status.edit_text(
+        f"✅ Рецепт «{recipe.name}» импортирован (id {recipe.id}), {photo_note}.\nИсточник: {url}"
+    )
 
 
 # ---------------------------------------------------------------------------
