@@ -3,6 +3,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -62,12 +64,75 @@ CATEGORY_KEY_TO_NAME = {
 }
 
 
+# Слова, которые не несут смысла для сравнения названий блюд (предлоги, союзы
+# и самое частое уточняющее слово "с"), чтобы "Рыба фугу" и "Рыба фугу в
+# соевом соусе" сравнивались по значимым словам, а не по общей длине строки.
+_NAME_STOPWORDS = {
+    "с", "со", "в", "во", "на", "из", "и", "или", "по", "для", "от", "к", "а",
+}
+
+
+def _normalize_name_words(name: str) -> frozenset[str]:
+    """
+    Приводит название блюда к набору значимых слов для сравнения:
+    убирает уточнения в скобках (обычно перевод на латинице), пунктуацию
+    и разбивает по дефисам, чтобы "суп-пюре" сравнивалось как {суп, пюре}.
+    """
+    without_parens = re.sub(r"\([^)]*\)", " ", name.lower())
+    words = re.split(r"[^а-яёa-z0-9]+", without_parens.replace("-", " "))
+    return frozenset(w for w in words if w and w not in _NAME_STOPWORDS)
+
+
+def names_are_similar(name_a: str, name_b: str) -> bool:
+    """
+    Приблизительно определяет, что два названия блюда — это, скорее всего,
+    одно и то же блюдо (например, из-за разных уточнений у ИИ-генерации):
+    "Рыба фугу" / "Рыба фугу в соевом соусе", "Фокачча" / "Фокачча (итальянский
+    плоский хлеб)". Не заменяет ручную проверку, но отсеивает очевидные дубли.
+    """
+    words_a, words_b = _normalize_name_words(name_a), _normalize_name_words(name_b)
+    if not words_a or not words_b:
+        return False
+    if words_a == words_b:
+        return True
+    # Один набор слов целиком содержится в другом - похоже на тот же
+    # рецепт с добавленным уточнением ("рыба фугу" внутри "рыба фугу в соевом соусе").
+    if words_a.issubset(words_b) or words_b.issubset(words_a):
+        return True
+    overlap = len(words_a & words_b) / len(words_a | words_b)
+    return overlap >= 0.5
+
+
+async def find_similar_active_recipe(session: AsyncSession, name: str) -> Recipe | None:
+    """
+    Ищет среди активных рецептов такой, чьё название похоже на переданное
+    (см. names_are_similar). Используется, чтобы не плодить дубли вроде
+    "Грибной крем-суп" / "Грибной суп-пюре" при генерации через ИИ.
+    """
+    result = await session.execute(
+        select(Recipe).where(Recipe.is_active.is_(True)).options(selectinload(Recipe.category))
+    )
+    for recipe in result.scalars().all():
+        if names_are_similar(recipe.name, name):
+            return recipe
+    return None
+
+
 async def create_recipe_from_ai_data(session: AsyncSession, data: dict) -> Recipe:
     """
     Создаёт рецепт из JSON, полученного от ИИ (backend/ai_recipe.py),
     той же схемы, что и data/seed_recipes.json, плюс поле photo_prompt.
     Помечает рецепт как is_ai_generated=True.
+
+    Если среди уже сохранённых рецептов находится похожий по названию
+    (см. find_similar_active_recipe) - новый не создаётся, возвращается
+    существующий, чтобы избежать дублей вроде "Рыба фугу" / "Рыба фугу
+    в соевом соусе".
     """
+    similar = await find_similar_active_recipe(session, data["name"])
+    if similar is not None:
+        return similar
+
     category_name = CATEGORY_KEY_TO_NAME.get(data.get("category"), "Вторые блюда")
     category = await get_or_create_category(session, category_name)
 
