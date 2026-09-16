@@ -98,7 +98,7 @@ async def regenerate(recipe_id: int, dish_name: str | None) -> None:
         for i, step in enumerate(data.get("steps", []), start=1):
             session.add(RecipeStep(
                 recipe_id=recipe.id, step_number=i,
-                text=step["text"], timer_minutes=step.get("timer_minutes"),
+                text=step["text"], timer_minutes=crud.normalize_timer_minutes(step.get("timer_minutes")),
             ))
 
         await session.commit()
