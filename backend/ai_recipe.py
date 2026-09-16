@@ -52,7 +52,19 @@ class RecipeGenerationError(Exception):
 
 
 def build_prompt(dish_name: str) -> str:
-    return f"Составь подробный кулинарный рецепт блюда «{dish_name}».\n\n{RECIPE_SCHEMA_INSTRUCTIONS}"
+    return (
+        f"Составь подробный кулинарный рецепт блюда «{dish_name}».\n\n"
+        f"Важно: это реальное, конкретное блюдо со своей историей и кухней. "
+        f"Прежде чем писать рецепт, вспомни, что это блюдо представляет собой "
+        f"на самом деле, и не путай его с другим блюдом, которое звучит или "
+        f"пишется похоже (например, «Шаньга» — это русская дрожжевая лепёшка "
+        f"с картофельной или творожной начинкой, а не блюдо восточной кухни "
+        f"с похожим на слух названием). Поле \"cuisine\" должно отражать "
+        f"кухню именно этого блюда, а не кухню, к которой оно может показаться "
+        f"похожим по звучанию названия. Если существует несколько блюд с таким "
+        f"названием — опиши наиболее известный, классический вариант.\n\n"
+        f"{RECIPE_SCHEMA_INSTRUCTIONS}"
+    )
 
 
 def extract_json(text: str) -> dict:
@@ -106,7 +118,48 @@ def generate_recipe_dict(dish_name: str) -> dict:
     Groq напрямую, Groq через прокси. Возвращает распарсенный JSON
     от первого провайдера, который ответил успешно.
     """
-    prompt = build_prompt(dish_name)
+    return _call_with_fallback(build_prompt(dish_name), error_subject=f"рецепт «{dish_name}»")
+
+
+VERIFY_SCHEMA_INSTRUCTIONS = """Ответь СТРОГО одним JSON-объектом, без markdown-разметки, \
+без пояснений до или после, по следующей схеме:
+{
+  "matches": true/false,
+  "correct_cuisine": "правильное название кухни на русском",
+  "issue": "если matches=false - краткое описание в чём ошибка (1 предложение на русском), иначе пустая строка"
+}"""
+
+
+def build_verify_prompt(name: str, cuisine: str, description: str) -> str:
+    return (
+        f"В базе данных кулинарного приложения есть такая запись:\n"
+        f"Название блюда: «{name}»\n"
+        f"Кухня: «{cuisine}»\n"
+        f"Описание: «{description}»\n\n"
+        f"Проверь, действительно ли название соответствует реальному, известному блюду "
+        f"с такой кухней и таким описанием - а не было спутано с каким-то другим блюдом, "
+        f"которое звучит или пишется похоже (например, «Шаньга» - это русская дрожжевая "
+        f"лепёшка, а не блюдо восточной кухни с похожим по звучанию названием).\n\n"
+        f"{VERIFY_SCHEMA_INSTRUCTIONS}"
+    )
+
+
+def verify_recipe_dict(name: str, cuisine: str, description: str) -> dict:
+    """
+    Просит ИИ проверить, не спутаны ли название, кухня и описание рецепта,
+    уже сохранённого в базе, с другим похожим по звучанию блюдом.
+    Используется scripts/audit_recipes.py.
+    """
+    prompt = build_verify_prompt(name, cuisine, description)
+    return _call_with_fallback(prompt, error_subject=f"проверка «{name}»")
+
+
+def _call_with_fallback(prompt: str, error_subject: str) -> dict:
+    """
+    Пробует по очереди: Gemini напрямую, Gemini через прокси,
+    Groq напрямую, Groq через прокси. Возвращает распарсенный JSON
+    от первого провайдера, который ответил успешно.
+    """
     attempts = [
         ("gemini", False, call_gemini),
         ("gemini", True, call_gemini),
@@ -120,14 +173,14 @@ def generate_recipe_dict(dish_name: str) -> dict:
             text = call_fn(prompt, use_proxy)
             data = extract_json(text)
             logger.info(
-                "Рецепт «%s» сгенерирован провайдером %s (прокси=%s)", dish_name, provider_name, use_proxy
+                "Запрос «%s» выполнен провайдером %s (прокси=%s)", error_subject, provider_name, use_proxy
             )
             return data
         except Exception as e:
             label = f"{provider_name}(прокси={use_proxy})"
-            logger.warning("Не удалось получить рецепт через %s: %s", label, e)
+            logger.warning("Не удалось выполнить «%s» через %s: %s", error_subject, label, e)
             errors.append(f"{label}: {e}")
 
     raise RecipeGenerationError(
-        f"Не удалось сгенерировать рецепт «{dish_name}» ни одним провайдером: " + "; ".join(errors)
+        f"Не удалось выполнить «{error_subject}» ни одним провайдером: " + "; ".join(errors)
     )
