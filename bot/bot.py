@@ -302,7 +302,10 @@ async def try_add_recipe_json(message: Message):
 
         for i, step in enumerate(data.get("steps", []), start=1):
             session.add(
-                RecipeStep(recipe_id=recipe.id, step_number=i, text=step["text"], timer_minutes=step.get("timer_minutes"))
+                RecipeStep(
+                    recipe_id=recipe.id, step_number=i, text=step["text"],
+                    timer_minutes=crud.normalize_timer_minutes(step.get("timer_minutes")),
+                )
             )
 
         await session.commit()
