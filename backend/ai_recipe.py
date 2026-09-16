@@ -150,20 +150,46 @@ def call_cerebras(prompt: str, use_proxy: bool) -> str:
     return data["choices"][0]["message"]["content"]
 
 
+# Модели-модераторы на OpenRouter, которые нельзя использовать для генерации
+# текста - они отвечают классификацией "safe/unsafe", а не обычным текстом.
+_OPENROUTER_EXCLUDED_SUBSTRINGS = ("guard", "moderation")
+
+
+def _pick_openrouter_free_model(use_proxy: bool) -> str:
+    """
+    Каталог бесплатных моделей на OpenRouter меняется буквально каждую
+    неделю - модели то пропадают, то появляются новые. Поэтому вместо
+    захардкоженного имени модели каждый раз запрашиваем актуальный список
+    и берём любую подходящую бесплатную (не модератор).
+    """
+    response = requests.get(
+        "https://openrouter.ai/api/v1/models",
+        timeout=REQUEST_TIMEOUT_SECONDS,
+        proxies=_proxies(use_proxy),
+    )
+    response.raise_for_status()
+    for model in response.json().get("data", []):
+        model_id = model.get("id", "")
+        if not model_id.endswith(":free"):
+            continue
+        if any(bad in model_id.lower() for bad in _OPENROUTER_EXCLUDED_SUBSTRINGS):
+            continue
+        return model_id
+    raise RecipeGenerationError("На OpenRouter не нашлось подходящей бесплатной модели")
+
+
 def call_openrouter(prompt: str, use_proxy: bool) -> str:
     """
     OpenRouter даёт доступ к десяткам бесплатных моделей через один ключ.
-    Модель закреплена явно (а не "openrouter/free"), потому что автовыбор
-    иногда подсовывает модель-модератор (Llama Guard), которая отвечает не
-    текстом, а классификацией "safe/unsafe" - непригодной для наших JSON-схем.
     Получить ключ: https://openrouter.ai/keys
     """
     if not OPENROUTER_API_KEY:
         raise RecipeGenerationError("OPENROUTER_API_KEY не задан")
+    model_id = _pick_openrouter_free_model(use_proxy)
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
     payload = {
-        "model": "meta-llama/llama-3.1-70b-instruct:free",
+        "model": model_id,
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
     }
