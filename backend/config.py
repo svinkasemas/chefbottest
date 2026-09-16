@@ -23,6 +23,15 @@ PROXY_URL = os.getenv("PROXY_URL", "").strip() or None
 # Для генерации рецептов через ИИ, если их нет в базе (см. backend/ai_recipe.py)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip() or None
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip() or None
+# Запасные провайдеры на случай, если у Gemini/Groq закончился дневной лимит
+# бесплатного тарифа (что при росте числа пользователей будет случаться чаще) -
+# все дают щедрый бесплатный доступ без банковской карты:
+# Cerebras: https://cloud.cerebras.ai (~1 млн токенов/день)
+# OpenRouter: https://openrouter.ai/keys (бесплатные модели через "openrouter/free")
+# NVIDIA NIM: https://build.nvidia.com (пробные кредиты, ~40 запросов/мин)
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "").strip() or None
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip() or None
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip() or None
 
 # Разрешить работу без проверки подписи Telegram (ТОЛЬКО для локальной разработки
 # в браузере, где нет initData). На проде должно быть False.
