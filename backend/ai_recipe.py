@@ -138,7 +138,7 @@ def call_cerebras(prompt: str, use_proxy: bool) -> str:
     url = "https://api.cerebras.ai/v1/chat/completions"
     headers = {"Authorization": f"Bearer {CEREBRAS_API_KEY}"}
     payload = {
-        "model": "llama-3.3-70b",
+        "model": "gpt-oss-120b",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
     }
@@ -153,8 +153,9 @@ def call_cerebras(prompt: str, use_proxy: bool) -> str:
 def call_openrouter(prompt: str, use_proxy: bool) -> str:
     """
     OpenRouter даёт доступ к десяткам бесплатных моделей через один ключ.
-    Модель "openrouter/free" сама выбирает доступную бесплатную модель, так
-    что не нужно вручную следить, какая именно ещё не устарела/не убрана.
+    Модель закреплена явно (а не "openrouter/free"), потому что автовыбор
+    иногда подсовывает модель-модератор (Llama Guard), которая отвечает не
+    текстом, а классификацией "safe/unsafe" - непригодной для наших JSON-схем.
     Получить ключ: https://openrouter.ai/keys
     """
     if not OPENROUTER_API_KEY:
@@ -162,7 +163,7 @@ def call_openrouter(prompt: str, use_proxy: bool) -> str:
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {"Authorization": f"Bearer {OPENROUTER_API_KEY}"}
     payload = {
-        "model": "openrouter/free",
+        "model": "meta-llama/llama-3.1-70b-instruct:free",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.7,
     }
