@@ -5,7 +5,8 @@
     {"key": "salads", "name": "Салаты", "emoji": "🥗", "color": "#5C7A4E", "sort_order": 3},
     {"key": "baking", "name": "Выпечка", "emoji": "🥐", "color": "#D9A62E", "sort_order": 4},
     {"key": "desserts", "name": "Десерты", "emoji": "🍰", "color": "#A9557C", "sort_order": 5},
-    {"key": "drinks", "name": "Напитки", "emoji": "🥤", "color": "#3E7C8C", "sort_order": 6}
+    {"key": "drinks", "name": "Напитки", "emoji": "🥤", "color": "#3E7C8C", "sort_order": 6},
+    {"key": "sauces", "name": "Соусы и закуски", "emoji": "🫙", "color": "#8C5A3E", "sort_order": 7}
   ],
   "recipes": [
     {
@@ -366,6 +367,45 @@
       "steps": [
         {"text": "Нагрейте сок с пряностями и дольками апельсина, не доводя до кипения.", "timer_minutes": 15},
         {"text": "Добавьте мёд и дайте настояться.", "timer_minutes": 5}
+      ]
+    },
+    {
+      "category": "sauces", "name": "Соус Бешамель", "time_minutes": 20, "difficulty": 2,
+      "calories": 220, "price_level": "Недорого", "cuisine": "Французская", "base_portions": 4,
+      "description": "Классический белый соус на основе масла, муки и молока.",
+      "ingredients": [
+        {"name": "масло сливочное", "amount": 50, "unit": "г"},
+        {"name": "мука", "amount": 50, "unit": "г"},
+        {"name": "молоко", "amount": 500, "unit": "мл"},
+        {"name": "соль", "amount": 1, "unit": "по вкусу"},
+        {"name": "мускатный орех", "amount": 1, "unit": "щепотка"}
+      ],
+      "steps": [
+        {"text": "Растопите масло в сотейнике на среднем огне.", "timer_minutes": 2},
+        {"text": "Всыпьте муку и обжарьте, помешивая, до золотистого цвета.", "timer_minutes": 3},
+        {"text": "Тонкой струйкой влейте тёплое молоко, постоянно взбивая венчиком, чтобы не было комков.", "timer_minutes": 5},
+        {"text": "Варите на слабом огне до загустения, помешивая.", "timer_minutes": 7},
+        {"text": "Посолите, добавьте мускатный орех, снимите с огня.", "timer_minutes": null}
+      ]
+    },
+    {
+      "category": "sauces", "name": "Брускетта с томатами и базиликом", "time_minutes": 15, "difficulty": 1,
+      "calories": 160, "price_level": "Недорого", "cuisine": "Итальянская", "base_portions": 4,
+      "description": "Хрустящие тосты с ароматной томатной начинкой — лёгкая закуска на скорую руку.",
+      "ingredients": [
+        {"name": "багет", "amount": 0.5, "unit": "шт."},
+        {"name": "помидоры", "amount": 3, "unit": "шт."},
+        {"name": "чеснок", "amount": 2, "unit": "зубчика"},
+        {"name": "базилик", "amount": 1, "unit": "пучок"},
+        {"name": "масло оливковое", "amount": 3, "unit": "ст.л."},
+        {"name": "соль", "amount": 1, "unit": "по вкусу"}
+      ],
+      "steps": [
+        {"text": "Нарежьте багет наискось ломтиками толщиной 1-1.5 см.", "timer_minutes": null},
+        {"text": "Подсушите ломтики в духовке или на сухой сковороде до румяности.", "timer_minutes": 5},
+        {"text": "Натрите тёплые тосты зубчиком чеснока.", "timer_minutes": null},
+        {"text": "Мелко нарежьте помидоры и базилик, смешайте с оливковым маслом и солью.", "timer_minutes": 5},
+        {"text": "Выложите томатную смесь на тосты и сразу подавайте.", "timer_minutes": null}
       ]
     }
   ]
