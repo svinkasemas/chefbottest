@@ -28,7 +28,7 @@ REQUEST_TIMEOUT_SECONDS = 60
 RECIPE_SCHEMA_INSTRUCTIONS = """Ответь СТРОГО одним JSON-объектом, без markdown-разметки, \
 без пояснений до или после, по следующей схеме:
 {
-  "category": "soups|mains|salads|baking|desserts|drinks",
+  "category": "soups|mains|salads|baking|desserts|drinks|sauces",
   "name": "название блюда на русском",
   "time_minutes": число,
   "difficulty": число от 1 до 5,
@@ -42,7 +42,9 @@ RECIPE_SCHEMA_INSTRUCTIONS = """Ответь СТРОГО одним JSON-объ
   "steps": [{"text": "подробный шаг с конкретной техникой", "timer_minutes": число или null}]
 }
 Дай 5-9 ингредиентов и 5-8 подробных шагов приготовления (не общими фразами, \
-а с конкретными техниками, температурой, временем)."""
+а с конкретными техниками, температурой, временем).
+Категория "sauces" — это соусы, заправки и холодные/горячие закуски (брускетты, \
+намазки, роллы-закуски и т.п.), не являющиеся отдельным первым или вторым блюдом."""
 
 
 class RecipeGenerationError(Exception):
