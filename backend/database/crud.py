@@ -58,6 +58,7 @@ CATEGORY_KEY_TO_NAME = {
     "baking": "Выпечка",
     "desserts": "Десерты",
     "drinks": "Напитки",
+    "sauces": "Соусы и закуски",
 }
 
 
