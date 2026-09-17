@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -25,11 +26,19 @@ from backend.database.models import (
 async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None, full_name: str | None) -> User:
     result = await session.execute(select(User).where(User.telegram_id == telegram_id))
     user = result.scalar_one_or_none()
+    now = datetime.utcnow()
     if user is None:
-        user = User(telegram_id=telegram_id, username=username, full_name=full_name)
+        user = User(
+            telegram_id=telegram_id, username=username, full_name=full_name,
+            interaction_count=1, last_seen_at=now,
+        )
         session.add(user)
         await session.commit()
         await session.refresh(user)
+    else:
+        user.interaction_count += 1
+        user.last_seen_at = now
+        await session.commit()
     return user
 
 
@@ -405,3 +414,61 @@ async def delete_recipe_customization(session: AsyncSession, user_id: int, recip
     if existing is not None:
         await session.delete(existing)
         await session.commit()
+
+
+async def get_usage_stats(session: AsyncSession) -> dict:
+    """
+    Сводная статистика использования бота для /admin (см. bot.py).
+    Активность считается по User.last_seen_at, который обновляется на
+    каждое обращение к API (см. get_or_create_user).
+    """
+    now = datetime.utcnow()
+    day_ago = now - timedelta(days=1)
+    week_ago = now - timedelta(days=7)
+    month_ago = now - timedelta(days=30)
+
+    async def count(stmt) -> int:
+        return (await session.execute(stmt)).scalar_one()
+
+    users_total = await count(select(func.count(User.id)))
+    active_today = await count(select(func.count(User.id)).where(User.last_seen_at >= day_ago))
+    active_week = await count(select(func.count(User.id)).where(User.last_seen_at >= week_ago))
+    active_month = await count(select(func.count(User.id)).where(User.last_seen_at >= month_ago))
+
+    interactions_total = (await session.execute(select(func.sum(User.interaction_count)))).scalar_one() or 0
+
+    recipes_total = await count(select(func.count(Recipe.id)).where(Recipe.is_active.is_(True)))
+    recipes_ai_generated = await count(
+        select(func.count(Recipe.id)).where(Recipe.is_active.is_(True), Recipe.is_ai_generated.is_(True))
+    )
+    recipes_imported = await count(
+        select(func.count(Recipe.id)).where(Recipe.is_active.is_(True), Recipe.source_url.is_not(None))
+    )
+    recipes_added_today = await count(select(func.count(Recipe.id)).where(Recipe.created_at >= day_ago))
+    recipes_added_week = await count(select(func.count(Recipe.id)).where(Recipe.created_at >= week_ago))
+    recipes_added_month = await count(select(func.count(Recipe.id)).where(Recipe.created_at >= month_ago))
+
+    favorites_total = await count(select(func.count(Favorite.id)))
+
+    return {
+        "users_total": users_total,
+        "active_today": active_today,
+        "active_week": active_week,
+        "active_month": active_month,
+        "interactions_total": int(interactions_total),
+        "recipes_total": recipes_total,
+        "recipes_ai_generated": recipes_ai_generated,
+        "recipes_imported": recipes_imported,
+        "recipes_added_today": recipes_added_today,
+        "recipes_added_week": recipes_added_week,
+        "recipes_added_month": recipes_added_month,
+        "favorites_total": favorites_total,
+    }
+
+
+async def get_top_users(session: AsyncSession, limit: int = 20) -> list[User]:
+    """Пользователи, отсортированные по частоте использования бота (interaction_count)."""
+    result = await session.execute(
+        select(User).order_by(User.interaction_count.desc()).limit(limit)
+    )
+    return list(result.scalars().all())
