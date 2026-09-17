@@ -69,6 +69,10 @@ class Recipe(Base):
     # Ссылка на исходный сайт, если рецепт был импортирован по URL
     # (см. backend/recipe_import.py) - для указания авторства/источника.
     source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    # Кто из пользователей добавил рецепт (по ссылке или через поиск блюда,
+    # которого не было в базе) - для модерации, см. /admin в bot.py.
+    # None для рецептов из seed_recipes.json и добавленных вручную админом.
+    added_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     time_minutes: Mapped[int] = mapped_column(Integer, default=30)
     difficulty: Mapped[int] = mapped_column(Integer, default=2)  # 1..5
@@ -91,6 +95,7 @@ class Recipe(Base):
         cascade="all, delete-orphan",
         order_by="RecipeStep.step_number",
     )
+    added_by: Mapped["User | None"] = relationship(foreign_keys=[added_by_user_id])
 
 
 class RecipeIngredient(Base):
