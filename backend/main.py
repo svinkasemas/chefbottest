@@ -209,6 +209,7 @@ async def api_recipe_detail(
         is_favorite=recipe.id in favorite_ids,
         photo_url=photo_url_for(recipe),
         custom_time_minutes=customization.custom_time_minutes if customization else None,
+        source_url=recipe.source_url,
     )
 
 
