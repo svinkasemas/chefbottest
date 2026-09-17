@@ -143,7 +143,9 @@ def normalize_timer_minutes(value) -> int | None:
         return None
 
 
-async def create_recipe_from_ai_data(session: AsyncSession, data: dict, source_url: str | None = None) -> Recipe:
+async def create_recipe_from_ai_data(
+    session: AsyncSession, data: dict, source_url: str | None = None, added_by_user_id: int | None = None
+) -> Recipe:
     """
     Создаёт рецепт из JSON, полученного от ИИ (backend/ai_recipe.py),
     той же схемы, что и data/seed_recipes.json, плюс поле photo_prompt.
@@ -152,6 +154,11 @@ async def create_recipe_from_ai_data(session: AsyncSession, data: dict, source_u
     source_url - ссылка на исходную страницу, если рецепт был импортирован
     (см. backend/recipe_import.py), чтобы указать источник и не нарушать
     авторские права; для обычной генерации "с нуля" - None.
+
+    added_by_user_id - id пользователя (Users.id, не telegram_id), который
+    инициировал добавление (через поиск незнакомого блюда или импорт по
+    ссылке) - для модерации, см. /admin в bot.py. None для рецептов из
+    seed_recipes.json и добавленных вручную админом через JSON.
 
     Если среди уже сохранённых рецептов находится похожий по названию
     (см. find_similar_active_recipe) - новый не создаётся, возвращается
@@ -178,6 +185,7 @@ async def create_recipe_from_ai_data(session: AsyncSession, data: dict, source_u
         description=data.get("description", ""),
         is_ai_generated=True,
         source_url=source_url,
+        added_by_user_id=added_by_user_id,
     )
     session.add(recipe)
     await session.flush()
@@ -477,4 +485,20 @@ async def get_top_users(session: AsyncSession, limit: int = 20) -> list[User]:
 async def get_all_users(session: AsyncSession) -> list[User]:
     """Все пользователи (для полного списка при модерации, см. /admin в bot.py)."""
     result = await session.execute(select(User).order_by(User.interaction_count.desc()))
+    return list(result.scalars().all())
+
+
+async def get_user_submitted_recipes(session: AsyncSession) -> list[Recipe]:
+    """
+    Рецепты, добавленные пользователями (через поиск незнакомого блюда или
+    импорт по ссылке) - для модерации, см. /admin в bot.py. Не включает
+    рецепты из seed_recipes.json и добавленные вручную админом через JSON
+    (у них added_by_user_id пусто).
+    """
+    result = await session.execute(
+        select(Recipe)
+        .where(Recipe.added_by_user_id.is_not(None))
+        .options(selectinload(Recipe.added_by))
+        .order_by(Recipe.created_at.desc())
+    )
     return list(result.scalars().all())
