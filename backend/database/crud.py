@@ -14,6 +14,7 @@ from backend.database.models import (
     Favorite,
     Ingredient,
     Recipe,
+    RecipeCustomization,
     RecipeIngredient,
     RecipeStep,
     ShoppingListItem,
@@ -350,3 +351,52 @@ async def clear_checked_shopping_items(session: AsyncSession, user_id: int) -> N
     for item in result.scalars().all():
         await session.delete(item)
     await session.commit()
+
+
+async def get_recipe_customization(
+    session: AsyncSession, user_id: int, recipe_id: int
+) -> RecipeCustomization | None:
+    result = await session.execute(
+        select(RecipeCustomization).where(
+            RecipeCustomization.user_id == user_id, RecipeCustomization.recipe_id == recipe_id
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def save_recipe_customization(
+    session: AsyncSession,
+    user_id: int,
+    recipe_id: int,
+    time_minutes: int | None,
+    step_notes: dict[str, str],
+) -> RecipeCustomization | None:
+    """
+    Сохраняет (или создаёт) личные правки пользователя к рецепту. Пустые
+    заметки не сохраняются - если после очистки правок ничего не осталось
+    (нет ни своего времени, ни заметок), удаляет запись целиком.
+    """
+    clean_notes = {k: v.strip() for k, v in step_notes.items() if v and v.strip()}
+    existing = await get_recipe_customization(session, user_id, recipe_id)
+
+    if time_minutes is None and not clean_notes:
+        if existing is not None:
+            await session.delete(existing)
+            await session.commit()
+        return existing
+
+    if existing is None:
+        existing = RecipeCustomization(user_id=user_id, recipe_id=recipe_id)
+        session.add(existing)
+
+    existing.custom_time_minutes = time_minutes
+    existing.step_notes = clean_notes
+    await session.commit()
+    return existing
+
+
+async def delete_recipe_customization(session: AsyncSession, user_id: int, recipe_id: int) -> None:
+    existing = await get_recipe_customization(session, user_id, recipe_id)
+    if existing is not None:
+        await session.delete(existing)
+        await session.commit()
