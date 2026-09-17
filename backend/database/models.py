@@ -10,12 +10,14 @@
 - users                — пользователи мини-приложения (идентифицируются по telegram_id)
 - favorites            — избранные рецепты пользователя
 - shopping_list        — список покупок пользователя
+- recipe_customizations — личные правки пользователя к рецепту (время, заметки к шагам)
 """
 from __future__ import annotations
 
 from datetime import datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     DateTime,
     Float,
@@ -147,3 +149,24 @@ class ShoppingListItem(Base):
     unit: Mapped[str] = mapped_column(String(20), default="")
     is_checked: Mapped[bool] = mapped_column(Boolean, default=False)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class RecipeCustomization(Base):
+    """
+    Личные правки пользователя к рецепту - своё время приготовления и/или
+    заметки к отдельным шагам (например "добавить лимон"). Не меняют сам
+    рецепт в общей базе - видны только тому, кто их сделал.
+    """
+    __tablename__ = "recipe_customizations"
+    __table_args__ = (UniqueConstraint("user_id", "recipe_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipes.id"))
+    custom_time_minutes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Заметки к шагам: {"3": "добавить лимон"} - ключ это step_number строкой
+    # (JSON-объекты всегда со строковыми ключами).
+    step_notes: Mapped[dict] = mapped_column(JSON, default=dict)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
