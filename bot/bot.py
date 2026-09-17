@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -34,7 +35,7 @@ from aiogram.types import (
     WebAppInfo,
 )
 from dotenv import load_dotenv
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 load_dotenv()
 
@@ -143,17 +144,33 @@ async def admin_stats(callback):
     if not is_admin(callback.from_user.id):
         await callback.answer()
         return
-    async with async_session() as session:
-        recipes_count = (await session.execute(select(func.count(Recipe.id)))).scalar_one()
-        users_count = (await session.execute(select(func.count(User.id)))).scalar_one()
-        favorites_count = (await session.execute(select(func.count(Favorite.id)))).scalar_one()
 
-    await callback.message.answer(
-        "📊 <b>Статистика</b>\n\n"
-        f"📚 Рецептов: {recipes_count}\n"
-        f"👥 Пользователей: {users_count}\n"
-        f"❤️ Избранного добавлено: {favorites_count}"
-    )
+    async with async_session() as session:
+        stats = await crud.get_usage_stats(session)
+        top_users = await crud.get_top_users(session, limit=20)
+
+    lines = [
+        "📊 <b>Статистика</b>\n",
+        f"👥 Пользователей всего: {stats['users_total']}",
+        f"   активны сегодня: {stats['active_today']} · за 7 дней: {stats['active_week']} · за 30 дней: {stats['active_month']}",
+        f"🔄 Использований бота всего: {stats['interactions_total']}",
+        f"❤️ Избранного добавлено: {stats['favorites_total']}\n",
+        f"📚 Рецептов в базе: {stats['recipes_total']} "
+        f"(ИИ-генерация: {stats['recipes_ai_generated']}, по ссылке: {stats['recipes_imported']})",
+        f"   добавлено сегодня: {stats['recipes_added_today']} · за 7 дней: {stats['recipes_added_week']} · "
+        f"за 30 дней: {stats['recipes_added_month']}\n",
+        "🏆 <b>Топ по частоте использования:</b>",
+    ]
+
+    if not top_users:
+        lines.append("(пока никто не пользовался)")
+    else:
+        for u in top_users:
+            label = f"@{u.username}" if u.username else html.escape(u.full_name or f"id{u.telegram_id}")
+            last_seen = u.last_seen_at.strftime("%d.%m %H:%M") if u.last_seen_at else "—"
+            lines.append(f"{label} — {u.interaction_count} · был(а) {last_seen}")
+
+    await callback.message.answer("\n".join(lines))
     await callback.answer()
 
 
