@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -69,6 +69,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def no_cache_for_index_html(request: Request, call_next):
+    """
+    Telegram Mini App (особенно мобильный клиент) агрессивно кэширует саму
+    страницу index.html - без явного заголовка браузер может продолжать
+    показывать старую версию разметки даже после обновления на сервере
+    (в отличие от app.js/styles.css, у которых кэш сбрасывается через
+    ?v=N в самом index.html). Явный no-cache заставляет клиент каждый раз
+    перепроверять актуальность у сервера, а не полагаться на догадку.
+    """
+    response = await call_next(request)
+    if request.url.path == "/":
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return response
 
 
 def photo_url_for(recipe) -> str | None:
