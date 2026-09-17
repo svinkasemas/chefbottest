@@ -51,7 +51,7 @@ WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
 # клиент) агрессивно кэширует саму страницу Mini App по её URL; изменение
 # URL - самый надёжный способ заставить его загрузить свежую версию, не
 # полагаясь на HTTP-кэш и не прося пользователей вручную чистить кэш.
-WEBAPP_VERSION = "2"
+WEBAPP_VERSION = "3"
 
 
 def _webapp_url() -> str:
@@ -353,7 +353,7 @@ async def try_add_recipe_from_url(message: Message):
 
     async with async_session() as session:
         existing = await crud.find_similar_active_recipe(session, data["name"])
-        recipe = await crud.create_recipe_from_ai_data(session, data)
+        recipe = await crud.create_recipe_from_ai_data(session, data, source_url=url)
 
     if existing is not None:
         await status.edit_text(
