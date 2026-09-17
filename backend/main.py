@@ -33,6 +33,7 @@ from backend.schemas import (
     FridgeMatchIn,
     GenerateRecipeIn,
     IngredientOut,
+    RecipeCustomizationIn,
     RecipeDetail,
     RecipeShort,
     ShoppingItemOut,
@@ -150,6 +151,8 @@ async def api_recipe_detail(
 
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
+    customization = await crud.get_recipe_customization(db, db_user.id, recipe_id)
+    step_notes = customization.step_notes if customization else {}
 
     target_portions = portions or recipe.base_portions
     ingredients = [
@@ -162,7 +165,12 @@ async def api_recipe_detail(
         for link in recipe.ingredient_links
     ]
     steps = [
-        StepOut(step_number=s.step_number, text=s.text, timer_minutes=s.timer_minutes)
+        StepOut(
+            step_number=s.step_number,
+            text=s.text,
+            timer_minutes=s.timer_minutes,
+            note=step_notes.get(str(s.step_number)),
+        )
         for s in recipe.steps
     ]
 
@@ -184,7 +192,41 @@ async def api_recipe_detail(
         steps=steps,
         is_favorite=recipe.id in favorite_ids,
         photo_url=photo_url_for(recipe),
+        custom_time_minutes=customization.custom_time_minutes if customization else None,
     )
+
+
+@app.put("/api/recipes/{recipe_id}/customize")
+async def api_save_recipe_customization(
+    recipe_id: int,
+    payload: RecipeCustomizationIn,
+    db: AsyncSession = Depends(get_db),
+    user: TelegramUser = Depends(get_current_user),
+):
+    """
+    Сохраняет личные правки пользователя к рецепту - своё время
+    приготовления и/или заметки к шагам (например "добавить лимон").
+    Не меняет сам рецепт в общей базе - видно только автору правок.
+    """
+    recipe = await crud.get_recipe_full(db, recipe_id)
+    if recipe is None:
+        raise HTTPException(404, "Рецепт не найден")
+
+    db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+    await crud.save_recipe_customization(db, db_user.id, recipe_id, payload.time_minutes, payload.step_notes)
+    return {"ok": True}
+
+
+@app.delete("/api/recipes/{recipe_id}/customize")
+async def api_delete_recipe_customization(
+    recipe_id: int,
+    db: AsyncSession = Depends(get_db),
+    user: TelegramUser = Depends(get_current_user),
+):
+    """Сбрасывает личные правки пользователя к рецепту обратно к оригиналу."""
+    db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+    await crud.delete_recipe_customization(db, db_user.id, recipe_id)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
