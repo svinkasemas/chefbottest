@@ -118,6 +118,7 @@ def admin_kb() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
         [InlineKeyboardButton(text="👥 Все пользователи", callback_data="admin_users_full")],
+        [InlineKeyboardButton(text="🙋 Добавлено пользователями", callback_data="admin_user_recipes")],
         [InlineKeyboardButton(text="📃 Список рецептов", callback_data="admin_recipes_list")],
         [InlineKeyboardButton(text="➕ Как добавить рецепт", callback_data="admin_add_help")],
     ]
@@ -213,6 +214,49 @@ async def admin_users_full(callback):
     await callback.answer()
 
 
+@dp.callback_query(F.data == "admin_user_recipes")
+async def admin_user_recipes(callback):
+    """
+    Рецепты, добавленные пользователями (через поиск незнакомого блюда или
+    импорт по ссылке) - чтобы найти id и удалить неподходящий через
+    /delete_recipe ID. Рецепты из seed_recipes.json и добавленные вручную
+    админом сюда не попадают.
+    """
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        recipes = await crud.get_user_submitted_recipes(session)
+
+    if not recipes:
+        await callback.message.answer("Пока никто из пользователей не добавлял рецептов.")
+        await callback.answer()
+        return
+
+    lines = [
+        f"Рецептов, добавленных пользователями: {len(recipes)}\n"
+        f"Чтобы удалить неподходящий: /delete_recipe ID\n"
+    ]
+    for r in recipes:
+        who = f"@{r.added_by.username}" if r.added_by and r.added_by.username else (
+            html.escape(r.added_by.full_name) if r.added_by and r.added_by.full_name else "неизвестно"
+        )
+        status = "✅" if r.is_active else "🚫 скрыт"
+        via = f"по ссылке: {html.escape(r.source_url)}" if r.source_url else "через поиск блюда"
+        lines.append(
+            f"#{r.id} {status} «{html.escape(r.name)}» — {who}, "
+            f"{r.created_at.strftime('%d.%m %H:%M')}, {via}"
+        )
+
+    text = "\n".join(lines)
+    # На случай, если список слишком длинный для одного сообщения Telegram.
+    chunk_size = 3500
+    for i in range(0, len(text), chunk_size):
+        await callback.message.answer(text[i : i + chunk_size])
+    await callback.answer()
+
+
 @dp.callback_query(F.data == "admin_add_help")
 async def admin_add_help(callback):
     if not is_admin(callback.from_user.id):
@@ -291,7 +335,7 @@ async def delete_recipe_cmd(message: Message):
         recipe.is_active = False
         await session.commit()
 
-    await message.answer(f"Рецепт «{recipe.name}» скрыт из приложения.")
+    await message.answer(f"Рецепт «{html.escape(recipe.name)}» скрыт из приложения.")
 
 
 @dp.message(Command("broadcast"))
@@ -380,7 +424,7 @@ async def try_add_recipe_json(message: Message):
 
         await session.commit()
 
-    await message.answer(f"✅ Рецепт «{data['name']}» добавлен (id {recipe.id}).")
+    await message.answer(f"✅ Рецепт «{html.escape(data['name'])}» добавлен (id {recipe.id}).")
 
 
 @dp.message(F.text.regexp(r"^https?://\S+$"))
@@ -408,12 +452,17 @@ async def try_add_recipe_from_url(message: Message):
         return
 
     async with async_session() as session:
+        submitter = await crud.get_or_create_user(
+            session, message.from_user.id, message.from_user.username, message.from_user.full_name
+        )
         existing = await crud.find_similar_active_recipe(session, data["name"])
-        recipe = await crud.create_recipe_from_ai_data(session, data, source_url=url)
+        recipe = await crud.create_recipe_from_ai_data(
+            session, data, source_url=url, added_by_user_id=submitter.id
+        )
 
     if existing is not None:
         await status.edit_text(
-            f"Похожий рецепт «{recipe.name}» уже есть в базе (id {recipe.id}) — новый не создавал."
+            f"Похожий рецепт «{html.escape(recipe.name)}» уже есть в базе (id {recipe.id}) — новый не создавал."
         )
         return
 
@@ -432,7 +481,8 @@ async def try_add_recipe_from_url(message: Message):
             logger.warning("Не удалось скачать фото рецепта с %s: %s", image_url, e)
 
     await status.edit_text(
-        f"✅ Рецепт «{recipe.name}» импортирован (id {recipe.id}), {photo_note}.\nИсточник: {url}"
+        f"✅ Рецепт «{html.escape(recipe.name)}» импортирован (id {recipe.id}), {photo_note}.\n"
+        f"Источник: {html.escape(url)}"
     )
 
 
