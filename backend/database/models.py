@@ -66,6 +66,9 @@ class Recipe(Base):
     photo_path: Mapped[str | None] = mapped_column(String(300), nullable=True)
     photo_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_ai_generated: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Ссылка на исходный сайт, если рецепт был импортирован по URL
+    # (см. backend/recipe_import.py) - для указания авторства/источника.
+    source_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
     time_minutes: Mapped[int] = mapped_column(Integer, default=30)
     difficulty: Mapped[int] = mapped_column(Integer, default=2)  # 1..5
