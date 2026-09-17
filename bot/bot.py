@@ -46,6 +46,20 @@ from backend.recipe_import import RecipeImportError, download_image_bytes, impor
 
 WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
 
+# Версия ссылки на Mini App - поднимайте на 1 при каждом деплое фронтенда
+# (webapp/index.html, app.js, styles.css). Telegram (особенно мобильный
+# клиент) агрессивно кэширует саму страницу Mini App по её URL; изменение
+# URL - самый надёжный способ заставить его загрузить свежую версию, не
+# полагаясь на HTTP-кэш и не прося пользователей вручную чистить кэш.
+WEBAPP_VERSION = "2"
+
+
+def _webapp_url() -> str:
+    if not WEBAPP_URL:
+        return WEBAPP_URL
+    separator = "&" if "?" in WEBAPP_URL else "?"
+    return f"{WEBAPP_URL}{separator}v={WEBAPP_VERSION}"
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
@@ -64,7 +78,7 @@ def is_admin(user_id: int) -> bool:
 
 def open_app_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="🍽 Открыть ChefBot", web_app=WebAppInfo(url=WEBAPP_URL))]]
+        inline_keyboard=[[InlineKeyboardButton(text="🍽 Открыть ChefBot", web_app=WebAppInfo(url=_webapp_url()))]]
     )
 
 
@@ -378,7 +392,7 @@ async def main() -> None:
 
     if WEBAPP_URL:
         try:
-            await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="ChefBot", web_app=WebAppInfo(url=WEBAPP_URL)))
+            await bot.set_chat_menu_button(menu_button=MenuButtonWebApp(text="ChefBot", web_app=WebAppInfo(url=_webapp_url())))
         except Exception as e:
             logger.warning("Не удалось установить кнопку меню чата: %s", e)
     else:
