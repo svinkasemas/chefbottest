@@ -472,3 +472,9 @@ async def get_top_users(session: AsyncSession, limit: int = 20) -> list[User]:
         select(User).order_by(User.interaction_count.desc()).limit(limit)
     )
     return list(result.scalars().all())
+
+
+async def get_all_users(session: AsyncSession) -> list[User]:
+    """Все пользователи (для полного списка при модерации, см. /admin в bot.py)."""
+    result = await session.execute(select(User).order_by(User.interaction_count.desc()))
+    return list(result.scalars().all())
