@@ -34,6 +34,7 @@ class StepOut(BaseModel):
     step_number: int
     text: str
     timer_minutes: int | None = None
+    note: str | None = None
 
 
 class RecipeDetail(BaseModel):
@@ -54,6 +55,17 @@ class RecipeDetail(BaseModel):
     steps: list[StepOut]
     is_favorite: bool
     photo_url: str | None = None
+    custom_time_minutes: int | None = None
+
+
+class RecipeCustomizationIn(BaseModel):
+    """
+    Личные правки пользователя к рецепту, отправляемые при сохранении в
+    редакторе (см. PUT /api/recipes/{id}/customize). step_notes - словарь
+    {номер_шага_строкой: текст_заметки}, пустые заметки можно не включать.
+    """
+    time_minutes: int | None = None
+    step_notes: dict[str, str] = {}
 
 
 class FridgeMatch(BaseModel):
