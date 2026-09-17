@@ -290,7 +290,7 @@ async def api_generate_recipe(
     except RecipeGenerationError as e:
         raise HTTPException(502, str(e))
 
-    recipe = await crud.create_recipe_from_ai_data(db, data)
+    recipe = await crud.create_recipe_from_ai_data(db, data, added_by_user_id=db_user.id)
     recipe_full = await crud.get_recipe_full(db, recipe.id)
     return recipe_to_short(recipe_full, favorite_ids)
 
