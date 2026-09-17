@@ -134,11 +134,15 @@ def normalize_timer_minutes(value) -> int | None:
         return None
 
 
-async def create_recipe_from_ai_data(session: AsyncSession, data: dict) -> Recipe:
+async def create_recipe_from_ai_data(session: AsyncSession, data: dict, source_url: str | None = None) -> Recipe:
     """
     Создаёт рецепт из JSON, полученного от ИИ (backend/ai_recipe.py),
     той же схемы, что и data/seed_recipes.json, плюс поле photo_prompt.
     Помечает рецепт как is_ai_generated=True.
+
+    source_url - ссылка на исходную страницу, если рецепт был импортирован
+    (см. backend/recipe_import.py), чтобы указать источник и не нарушать
+    авторские права; для обычной генерации "с нуля" - None.
 
     Если среди уже сохранённых рецептов находится похожий по названию
     (см. find_similar_active_recipe) - новый не создаётся, возвращается
@@ -164,6 +168,7 @@ async def create_recipe_from_ai_data(session: AsyncSession, data: dict) -> Recip
         base_portions=data.get("base_portions", 4),
         description=data.get("description", ""),
         is_ai_generated=True,
+        source_url=source_url,
     )
     session.add(recipe)
     await session.flush()
