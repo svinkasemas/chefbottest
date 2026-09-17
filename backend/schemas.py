@@ -56,6 +56,7 @@ class RecipeDetail(BaseModel):
     is_favorite: bool
     photo_url: str | None = None
     custom_time_minutes: int | None = None
+    source_url: str | None = None
 
 
 class RecipeCustomizationIn(BaseModel):
