@@ -28,6 +28,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
+    BufferedInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -116,6 +117,7 @@ async def cmd_start(message: Message):
 def admin_kb() -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")],
+        [InlineKeyboardButton(text="👥 Все пользователи", callback_data="admin_users_full")],
         [InlineKeyboardButton(text="📃 Список рецептов", callback_data="admin_recipes_list")],
         [InlineKeyboardButton(text="➕ Как добавить рецепт", callback_data="admin_add_help")],
     ]
@@ -171,6 +173,43 @@ async def admin_stats(callback):
             lines.append(f"{label} — {u.interaction_count} · был(а) {last_seen}")
 
     await callback.message.answer("\n".join(lines))
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "admin_users_full")
+async def admin_users_full(callback):
+    """
+    Полный список пользователей файлом (для модерации) - в отличие от
+    топ-20 в статистике, здесь видны абсолютно все, включая тех, кто
+    почти не пользовался ботом.
+    """
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+
+    async with async_session() as session:
+        users = await crud.get_all_users(session)
+
+    if not users:
+        await callback.message.answer("Пользователей пока нет.")
+        await callback.answer()
+        return
+
+    header = f"{'id':<6} {'telegram_id':<12} {'username':<20} {'имя':<20} {'исп.':<6} {'посл. визит':<17} {'регистрация':<17} {'бан'}"
+    rows = [header, "-" * len(header)]
+    for u in users:
+        username = f"@{u.username}" if u.username else "-"
+        full_name = (u.full_name or "-")[:20]
+        last_seen = u.last_seen_at.strftime("%Y-%m-%d %H:%M") if u.last_seen_at else "-"
+        created = u.created_at.strftime("%Y-%m-%d %H:%M") if u.created_at else "-"
+        rows.append(
+            f"{u.id:<6} {u.telegram_id:<12} {username:<20} {full_name:<20} "
+            f"{u.interaction_count:<6} {last_seen:<17} {created:<17} {'да' if u.is_blocked else 'нет'}"
+        )
+
+    report = "\n".join(rows)
+    document = BufferedInputFile(report.encode("utf-8"), filename="chefbot_users.txt")
+    await callback.message.answer_document(document, caption=f"👥 Всего пользователей: {len(users)}")
     await callback.answer()
 
 
