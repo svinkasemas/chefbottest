@@ -130,8 +130,8 @@ async def admin_panel(message: Message):
         "🛠 <b>Панель администратора</b>\n\n"
         "Команды:\n"
         "/recipes_list — список рецептов с id\n"
-        "/delete_recipe <id> — скрыть рецепт\n"
-        "/broadcast <текст> — рассылка всем пользователям\n\n"
+        "/delete_recipe ID — скрыть рецепт\n"
+        "/broadcast ТЕКСТ — рассылка всем пользователям\n\n"
         "Чтобы добавить рецепт — пришлите JSON-объект рецепта (см. кнопку ниже), "
         "или просто скиньте ссылку на рецепт с любого кулинарного сайта — рецепт "
         "будет извлечён со страницы автоматически.",
@@ -239,7 +239,7 @@ async def delete_recipe_cmd(message: Message):
         return
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2 or not parts[1].strip().isdigit():
-        await message.answer("Использование: /delete_recipe <id>")
+        await message.answer("Использование: /delete_recipe ID")
         return
     recipe_id = int(parts[1].strip())
 
@@ -261,7 +261,7 @@ async def broadcast_cmd(message: Message):
         return
     parts = message.text.split(maxsplit=1)
     if len(parts) < 2:
-        await message.answer("Использование: /broadcast <текст сообщения>")
+        await message.answer("Использование: /broadcast ТЕКСТ СООБЩЕНИЯ")
         return
     text = parts[1]
 
