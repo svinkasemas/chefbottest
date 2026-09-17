@@ -130,6 +130,11 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Для статистики использования бота (см. /admin в bot.py): каждое
+    # обращение к API увеличивает счётчик и обновляет время последнего
+    # захода - грубая, но полезная оценка того, кто и как часто пользуется.
+    interaction_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Favorite(Base):
