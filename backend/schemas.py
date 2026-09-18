@@ -69,6 +69,11 @@ class RecipeCustomizationIn(BaseModel):
     step_notes: dict[str, str] = {}
 
 
+class CookIn(BaseModel):
+    """Тело запроса POST /api/recipes/{id}/cook - см. backend/achievements.py."""
+    via_random: bool = False
+
+
 class FridgeMatch(BaseModel):
     recipe: RecipeShort
     matched: int
