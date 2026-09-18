@@ -13,6 +13,8 @@ RecipeApp backend — FastAPI-сервер.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -41,7 +43,10 @@ from backend.schemas import (
     ToggleFavoriteIn,
 )
 from backend.ai_recipe import RecipeGenerationError, generate_recipe_dict
+from backend.recipe_import import RecipeImportError, import_recipe_from_url, search_recipe_url
 from backend.utils import scale_amount
+
+logger = logging.getLogger("chefbot.main")
 
 # Небольшой предустановленный список продуктов для быстрого выбора в
 # разделе "Мой холодильник" на фронтенде (полный поиск по любому продукту
@@ -268,8 +273,6 @@ async def api_generate_recipe(
     db: AsyncSession = Depends(get_db),
     user: TelegramUser = Depends(get_current_user),
 ):
-    import asyncio
-
     dish_name = payload.name.strip()
     if not dish_name:
         raise HTTPException(400, "Название блюда не может быть пустым")
@@ -283,14 +286,32 @@ async def api_generate_recipe(
     if similar is not None:
         return recipe_to_short(similar, favorite_ids)
 
-    try:
-        # generate_recipe_dict синхронный (requests) и может занимать до минуты -
-        # выносим в отдельный поток, чтобы не блокировать сервер для остальных пользователей
-        data = await asyncio.to_thread(generate_recipe_dict, dish_name)
-    except RecipeGenerationError as e:
-        raise HTTPException(502, str(e))
+    data: dict | None = None
+    source_url: str | None = None
 
-    recipe = await crud.create_recipe_from_ai_data(db, data, added_by_user_id=db_user.id)
+    # Сначала пробуем найти настоящий рецепт этого блюда в интернете и
+    # извлечь его - это заметно точнее, чем просить ИИ придумать рецепт
+    # по одному названию (он иногда путает похожие блюда или сочиняет
+    # неправильный состав). См. backend/recipe_import.py.
+    found_url = await asyncio.to_thread(search_recipe_url, dish_name)
+    if found_url:
+        try:
+            data, _ = await asyncio.to_thread(import_recipe_from_url, found_url)
+            source_url = found_url
+        except RecipeImportError as e:
+            logger.warning("Не удалось извлечь рецепт «%s» со страницы %s: %s", dish_name, found_url, e)
+
+    if data is None:
+        # Резервный путь, если в интернете ничего не нашлось или страницу
+        # не удалось разобрать - ИИ придумывает рецепт "с нуля", как раньше.
+        try:
+            data = await asyncio.to_thread(generate_recipe_dict, dish_name)
+        except RecipeGenerationError as e:
+            raise HTTPException(502, str(e))
+
+    recipe = await crud.create_recipe_from_ai_data(
+        db, data, source_url=source_url, added_by_user_id=db_user.id
+    )
     recipe_full = await crud.get_recipe_full(db, recipe.id)
     return recipe_to_short(recipe_full, favorite_ids)
 
