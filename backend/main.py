@@ -248,6 +248,26 @@ async def api_save_recipe_customization(
 
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     await crud.save_recipe_customization(db, db_user.id, recipe_id, payload.time_minutes, payload.step_notes)
+    newly_unlocked = await check_and_unlock(db, db_user.id)
+    return {
+        "ok": True,
+        "new_achievements": [
+            {"key": a.key, "title": a.title, "description": a.description, "emoji": a.emoji}
+            for a in newly_unlocked
+        ],
+    }
+
+
+@app.post("/api/recipes/{recipe_id}/share")
+async def api_share_recipe(
+    recipe_id: int, db: AsyncSession = Depends(get_db), user: TelegramUser = Depends(get_current_user)
+):
+    """
+    Фиксирует, что рецепт отправили через кнопку "Поделиться" (для ачивки
+    "Притча во языцех"). Считаем общее число пересылок рецепта, кто бы его
+    ни отправил - не только автор.
+    """
+    await crud.increment_share_count(db, recipe_id)
     return {"ok": True}
 
 
@@ -324,6 +344,7 @@ async def api_generate_recipe(
     recipe = await crud.create_recipe_from_ai_data(
         db, data, source_url=source_url, added_by_user_id=db_user.id
     )
+    await check_and_unlock(db, db_user.id)
     recipe_full = await crud.get_recipe_full(db, recipe.id)
     return recipe_to_short(recipe_full, favorite_ids)
 
