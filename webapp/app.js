@@ -55,6 +55,7 @@ async function shareRecipe(id, name) {
     flashToast("Не удалось получить ссылку — попробуйте позже");
     return;
   }
+  api(`/api/recipes/${id}/share`, { method: "POST" }).catch(() => {});
   const deepLink = `https://t.me/${username}?startapp=recipe_${id}`;
   const shareText = `Смотри рецепт «${name}» в ChefBot!`;
   if (tg && tg.openTelegramLink) {
@@ -669,12 +670,15 @@ const SCREENS = {
       const rawTime = timeInput.value.trim();
       const timeMinutes = rawTime ? Number(rawTime) : null;
 
-      await api(`/api/recipes/${id}/customize`, {
+      const result = await api(`/api/recipes/${id}/customize`, {
         method: "PUT",
         body: { time_minutes: timeMinutes, step_notes: stepNotes },
       });
       haptic("success");
       flashToast("Правки сохранены ✏️");
+      (result.new_achievements || []).forEach((a, i) => {
+        setTimeout(() => flashToast(`${a.emoji} Новая ачивка: ${a.title}`), (i + 1) * 2400);
+      });
       goBack();
     };
 
