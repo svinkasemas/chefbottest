@@ -43,11 +43,17 @@ async def get_or_create_user(session: AsyncSession, telegram_id: int, username: 
     return user
 
 
-async def get_or_create_category(session: AsyncSession, name: str, emoji: str = "🍽", color: str = "#B5462F", sort_order: int = 0) -> Category:
+async def get_or_create_category(
+    session: AsyncSession, name: str, emoji: str = "🍽", color: str = "#B5462F",
+    sort_order: int = 0, created_by_user_id: int | None = None,
+) -> Category:
     result = await session.execute(select(Category).where(Category.name == name))
     obj = result.scalar_one_or_none()
     if obj is None:
-        obj = Category(name=name, emoji=emoji, color=color, sort_order=sort_order)
+        obj = Category(
+            name=name, emoji=emoji, color=color, sort_order=sort_order,
+            created_by_user_id=created_by_user_id,
+        )
         session.add(obj)
         await session.flush()
     return obj
@@ -171,7 +177,7 @@ async def create_recipe_from_ai_data(
         return similar
 
     category_name = CATEGORY_KEY_TO_NAME.get(data.get("category"), "Вторые блюда")
-    category = await get_or_create_category(session, category_name)
+    category = await get_or_create_category(session, category_name, created_by_user_id=added_by_user_id)
 
     recipe = Recipe(
         category_id=category.id,
@@ -515,3 +521,11 @@ async def record_cook(session: AsyncSession, user_id: int, recipe_id: int, via_r
     session.add(log)
     await session.commit()
     return log
+
+
+async def increment_share_count(session: AsyncSession, recipe_id: int) -> None:
+    """См. POST /api/recipes/{id}/share - для ачивки 'Притча во языцех'."""
+    recipe = await session.get(Recipe, recipe_id)
+    if recipe is not None:
+        recipe.share_count += 1
+        await session.commit()
