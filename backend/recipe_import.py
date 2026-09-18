@@ -26,7 +26,7 @@ from urllib.parse import urljoin
 import requests
 
 from backend.ai_recipe import RECIPE_SCHEMA_INSTRUCTIONS, RecipeGenerationError, _call_with_fallback
-from backend.config import PROXY_URL
+from backend.config import PROXY_URL, TAVILY_API_KEY
 
 logger = logging.getLogger("recipe_import")
 
@@ -164,3 +164,48 @@ def download_image_bytes(image_url: str) -> bytes:
         except Exception as e:
             errors.append(f"прокси={use_proxy}: {e}")
     raise RecipeImportError(f"Не удалось скачать картинку {image_url}: " + "; ".join(errors))
+
+
+# Сайты, которые не отдают полезный текст рецепта (видео, соцсети) -
+# исключаем из поиска, чтобы не тратить попытку импорта впустую.
+_SEARCH_EXCLUDED_DOMAINS = [
+    "youtube.com", "youtu.be", "pinterest.com", "pinterest.ru",
+    "instagram.com", "tiktok.com", "facebook.com", "vk.com",
+]
+
+
+def search_recipe_url(dish_name: str) -> str | None:
+    """
+    Ищет в интернете страницу с реальным рецептом блюда через Tavily Search
+    API - бесплатно 1000 запросов/мес без карты (https://app.tavily.com), а
+    без ключа вообще работает ограниченный бесплатный "keyless"-доступ без
+    регистрации. Возвращает первый подходящий URL или None, если ничего не
+    нашлось - тогда вызывающий код падает обратно на генерацию ИИ "с нуля".
+    """
+    headers = {"Content-Type": "application/json"}
+    if TAVILY_API_KEY:
+        headers["Authorization"] = f"Bearer {TAVILY_API_KEY}"
+    else:
+        headers["X-Tavily-Access-Mode"] = "keyless"
+
+    payload = {
+        "query": f"рецепт {dish_name}",
+        "search_depth": "basic",
+        "max_results": 5,
+        "exclude_domains": _SEARCH_EXCLUDED_DOMAINS,
+    }
+
+    for use_proxy in (False, True):
+        try:
+            response = requests.post(
+                "https://api.tavily.com/search", json=payload, headers=headers,
+                timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy),
+            )
+            response.raise_for_status()
+            for result in response.json().get("results", []):
+                if result.get("url"):
+                    return result["url"]
+            return None
+        except Exception as e:
+            logger.warning("Поиск рецепта «%s» через Tavily не удался (прокси=%s): %s", dish_name, use_proxy, e)
+    return None
