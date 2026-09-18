@@ -25,11 +25,20 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Callable
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from backend.database.models import CookLog, Favorite, Recipe, RecipeIngredient, User, UserAchievement
+from backend.database.models import (
+    Category,
+    CookLog,
+    Favorite,
+    Recipe,
+    RecipeCustomization,
+    RecipeIngredient,
+    User,
+    UserAchievement,
+)
 
 INSTANT_KEYS = {"tactic_garrison"}
 
@@ -60,6 +69,7 @@ _ITALIAN_CUISINES = ["итальянск"]
 _ITALO_AMERICAN_CUISINES = ["итало-американск", "итальяно-американск"]
 _ZITI_NAME_KEYWORDS = ["зити", "лазанья"]
 _CHRISTMAS_NAME_KEYWORDS = ["имбирн", "глинтвейн", "рождеств", "новогодн"]
+_DRINKS_SNACKS_CATEGORY_KEYWORDS = ["напитки", "закуски"]
 
 
 def _ingredient_names(recipe: Recipe) -> list[str]:
@@ -74,16 +84,20 @@ def _any_keyword(text_list: list[str], keywords: list[str]) -> bool:
 class AchievementContext:
     events: list[tuple[CookLog, Recipe]]  # вся история готовки, старые -> новые
     favorites_count: int
-    own_recipes_count: int
+    own_recipes: list[Recipe]  # рецепты, добавленные этим пользователем
+    created_categories_count: int  # сколько категорий пользователь создал первым
+    has_note_on_own_recipe: bool  # оставил заметку к шагу своего же рецепта
     shopping_checked_total: int
     now: datetime
 
+    own_recipes_count: int = 0
     distinct_recipe_ids: set[int] = field(default_factory=set)
     cook_dates: set[date] = field(default_factory=set)
     max_day_streak: int = 0
     max_same_recipe_streak: int = 0
 
     def __post_init__(self) -> None:
+        self.own_recipes_count = len(self.own_recipes)
         self.distinct_recipe_ids = {r.id for _, r in self.events}
         self.cook_dates = {log.cooked_at.date() for log, _ in self.events}
         self.max_day_streak = _longest_streak(sorted(self.cook_dates))
@@ -100,6 +114,9 @@ class AchievementContext:
 
     def distinct_count_where(self, predicate: Callable[[Recipe], bool]) -> int:
         return len({r.id for _, r in self.events if predicate(r)})
+
+    def own_count_where(self, predicate: Callable[[Recipe], bool]) -> int:
+        return sum(1 for r in self.own_recipes if predicate(r))
 
 
 def _longest_streak(sorted_days: list[date]) -> int:
@@ -298,6 +315,94 @@ ACHIEVEMENTS: list[Achievement] = [
         ),
     ),
 
+    # --- Прогрессия базы (за собственный вклад в общую базу рецептов) -----
+    Achievement(
+        "wizard_guild", "Гильдия магов отстроена",
+        "Добавьте минимум по одному рецепту в 5 разных категорий.",
+        "🏛", "Прогрессия базы",
+        check=lambda c: len({r.category_id for r in c.own_recipes if r.category_id}) >= 5,
+    ),
+    Achievement(
+        "culinary_catechism", "Кулинарный катехизис",
+        "Самостоятельно добавьте 50 рецептов.",
+        "📖", "Прогрессия базы",
+        check=lambda c: c.own_recipes_count >= 50,
+    ),
+    Achievement(
+        "covenant_tablets", "Скрижали завета",
+        "Лично добавьте 100 рецептов в базу.",
+        "📜", "Прогрессия базы",
+        check=lambda c: c.own_recipes_count >= 100,
+    ),
+    Achievement(
+        "diocese_of_taste", "Епархия вкуса",
+        "Создайте 5 собственных уникальных категорий и наполните их.",
+        "⛪", "Прогрессия базы",
+        check=lambda c: c.created_categories_count >= 5,
+    ),
+
+    # --- За качество и дотошность данных ------------------------------------
+    Achievement(
+        "engineering_precision", "Инженерная точность",
+        "Добавьте рецепт с фото, кухней, временем и калориями, и все шаги расписаны.",
+        "📐", "Качество данных",
+        check=lambda c: c.own_count_where(
+            lambda r: bool(r.photo_path) and bool(r.cuisine) and r.time_minutes > 0
+            and r.calories > 0 and len(r.steps) > 0 and all(s.text.strip() for s in r.steps)
+        ) >= 1,
+    ),
+    Achievement(
+        "alchemical_formula", "Алхимическая формула",
+        "Добавьте сложный рецепт из 15 и более ингредиентов.",
+        "⚗️", "Качество данных",
+        check=lambda c: c.own_count_where(lambda r: len(r.ingredient_links) >= 15) >= 1,
+    ),
+    Achievement(
+        "art_of_minimalism", "Искусство минимализма",
+        "Добавьте рецепт из 2 ингредиентов максимум с 2 шагами.",
+        "🍳", "Качество данных",
+        check=lambda c: c.own_count_where(
+            lambda r: len(r.ingredient_links) <= 2 and len(r.steps) <= 2
+        ) >= 1,
+    ),
+    Achievement(
+        "talk_of_the_town", "Притча во языцех",
+        "Одним из ваших рецептов поделились более 5 раз.",
+        "📣", "Качество данных",
+        check=lambda c: c.own_count_where(lambda r: r.share_count > 5) >= 1,
+    ),
+
+    # --- Технические (способы добавления рецептов) -------------------------
+    Achievement(
+        "network_scout", "Сетевой разведчик",
+        "Добавьте 10 рецептов с помощью импорта по ссылке с других сайтов.",
+        "🌐", "Технические",
+        check=lambda c: c.own_count_where(lambda r: bool(r.source_url)) >= 10,
+    ),
+
+    # --- Тематические и нишевые ---------------------------------------------
+    Achievement(
+        "family_business", "Семейное дело",
+        "Добавьте 10 больших блюд, рассчитанных на компанию от 6 человек.",
+        "👨‍👩‍👧‍👦", "Нишевые",
+        check=lambda c: c.own_count_where(lambda r: r.base_portions >= 6) >= 10,
+    ),
+    Achievement(
+        "pub_chronicles", "Хроники паба",
+        "Добавьте 5 рецептов в категорию «Напитки» или «Закуски».",
+        "🍻", "Нишевые",
+        check=lambda c: c.own_count_where(
+            lambda r: r.category is not None
+            and _any_keyword([r.category.name.lower()], _DRINKS_SNACKS_CATEGORY_KEYWORDS)
+        ) >= 5,
+    ),
+    Achievement(
+        "voice_crying_out", "Глас вопиющего",
+        "Оставьте первую заметку к шагу своего же добавленного рецепта.",
+        "📢", "Нишевые",
+        check=lambda c: c.has_note_on_own_recipe,
+    ),
+
     # --- Скрытые (пасхалки) ------------------------------------------------
     Achievement(
         "groundhog_day", "День сурка",
@@ -332,16 +437,45 @@ async def build_context(session: AsyncSession, user_id: int) -> AchievementConte
         await session.execute(select(Favorite).where(Favorite.user_id == user_id))
     ).scalars().all()
 
-    own_recipes_count = (
-        await session.execute(select(Recipe).where(Recipe.added_by_user_id == user_id))
-    ).scalars().all()
+    own_recipes = list((
+        await session.execute(
+            select(Recipe)
+            .where(Recipe.added_by_user_id == user_id)
+            .options(
+                selectinload(Recipe.ingredient_links).selectinload(RecipeIngredient.ingredient),
+                selectinload(Recipe.category),
+                selectinload(Recipe.steps),
+            )
+        )
+    ).scalars().all())
+
+    created_categories_count = (
+        await session.execute(
+            select(func.count(Category.id)).where(Category.created_by_user_id == user_id)
+        )
+    ).scalar_one()
+
+    own_recipe_ids = {r.id for r in own_recipes}
+    has_note_on_own_recipe = False
+    if own_recipe_ids:
+        notes = (
+            await session.execute(
+                select(RecipeCustomization).where(
+                    RecipeCustomization.user_id == user_id,
+                    RecipeCustomization.recipe_id.in_(own_recipe_ids),
+                )
+            )
+        ).scalars().all()
+        has_note_on_own_recipe = any(n.step_notes for n in notes)
 
     user = await session.get(User, user_id)
 
     return AchievementContext(
         events=events,
         favorites_count=len(favorites_count),
-        own_recipes_count=len(own_recipes_count),
+        own_recipes=own_recipes,
+        created_categories_count=created_categories_count,
+        has_note_on_own_recipe=has_note_on_own_recipe,
         shopping_checked_total=user.shopping_items_checked_total if user else 0,
         now=datetime.utcnow(),
     )
