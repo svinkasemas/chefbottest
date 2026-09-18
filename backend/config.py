@@ -13,6 +13,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent  # корень проекта
 # --- Telegram ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_TOKEN_HERE")
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
+# Юзернейм бота без @ (например eattomeat_bot) - нужен для диплинков вида
+# t.me/USERNAME?startapp=recipe_42, см. GET /api/config в backend/main.py
+# и кнопку "Поделиться" на экране рецепта в webapp/app.js.
+BOT_USERNAME = os.getenv("BOT_USERNAME", "").strip().lstrip("@")
 
 # Прокси для подключения бота к api.telegram.org — нужен, если провайдер
 # блокирует/режет доступ к этому домену напрямую. Полный URL со схемой,
