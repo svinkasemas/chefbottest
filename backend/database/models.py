@@ -140,6 +140,10 @@ class User(Base):
     # захода - грубая, но полезная оценка того, кто и как часто пользуется.
     interaction_count: Mapped[int] = mapped_column(Integer, default=0)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Сколько товаров в списке покупок пользователь всего отметил купленными
+    # за всё время (не сбрасывается при очистке списка) - для ачивки
+    # "Запасливый", см. backend/achievements.py.
+    shopping_items_checked_total: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Favorite(Base):
@@ -183,3 +187,31 @@ class RecipeCustomization(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
+
+
+class CookLog(Base):
+    """
+    Запись о том, что пользователь довёл рецепт до конца в режиме готовки
+    (нажал "Готово!" на последнем шаге). Основа для ачивок - см.
+    backend/achievements.py.
+    """
+    __tablename__ = "cook_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    recipe_id: Mapped[int] = mapped_column(ForeignKey("recipes.id"))
+    cooked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    # Был ли рецепт открыт через кнопку "Случайный рецепт" - для ачивки
+    # "Шаг в неизвестность".
+    via_random: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class UserAchievement(Base):
+    """Разблокированные ачивки пользователя. См. backend/achievements.py."""
+    __tablename__ = "user_achievements"
+    __table_args__ = (UniqueConstraint("user_id", "achievement_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    achievement_key: Mapped[str] = mapped_column(String(64))
+    unlocked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
