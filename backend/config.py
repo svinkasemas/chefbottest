@@ -33,6 +33,12 @@ CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "").strip() or None
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip() or None
 NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip() or None
 
+# Поиск реального рецепта в интернете по названию блюда (backend/recipe_import.py),
+# вместо того чтобы просить ИИ придумать рецепт по памяти. Бесплатно 1000
+# запросов/мес без карты: https://app.tavily.com - без ключа тоже работает,
+# но с более жёстким лимитом ("keyless"-доступ).
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip() or None
+
 # Разрешить работу без проверки подписи Telegram (ТОЛЬКО для локальной разработки
 # в браузере, где нет initData). На проде должно быть False.
 DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
