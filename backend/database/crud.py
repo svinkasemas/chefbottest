@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.database.models import (
     Category,
+    CookLog,
     Favorite,
     Ingredient,
     Recipe,
@@ -502,3 +503,15 @@ async def get_user_submitted_recipes(session: AsyncSession) -> list[Recipe]:
         .order_by(Recipe.created_at.desc())
     )
     return list(result.scalars().all())
+
+
+async def record_cook(session: AsyncSession, user_id: int, recipe_id: int, via_random: bool = False) -> CookLog:
+    """
+    Фиксирует, что пользователь довёл рецепт до конца в режиме готовки
+    (см. POST /api/recipes/{id}/cook) - основа для ачивок,
+    см. backend/achievements.py.
+    """
+    log = CookLog(user_id=user_id, recipe_id=recipe_id, via_random=via_random)
+    session.add(log)
+    await session.commit()
+    return log
