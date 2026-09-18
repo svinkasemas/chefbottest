@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import TelegramUser, get_current_user
-from backend.config import CORS_ORIGINS, WEBAPP_DIR
+from backend.config import BOT_USERNAME, CORS_ORIGINS, WEBAPP_DIR
 from backend.database import crud
 from backend.database.db import get_db, init_db
 from backend.database.models import Category
@@ -117,6 +117,16 @@ def recipe_to_short(recipe, favorite_ids: set[int]) -> RecipeShort:
 # ---------------------------------------------------------------------------
 # Категории и рецепты
 # ---------------------------------------------------------------------------
+
+@app.get("/api/config")
+async def api_config():
+    """
+    Публичные настройки для фронтенда - сейчас только юзернейм бота, нужный
+    для диплинков вида t.me/USERNAME?startapp=recipe_42 (кнопка "Поделиться"
+    на экране рецепта, см. webapp/app.js).
+    """
+    return {"bot_username": BOT_USERNAME}
+
 
 @app.get("/api/categories", response_model=list[CategoryOut])
 async def api_categories(db: AsyncSession = Depends(get_db)):
