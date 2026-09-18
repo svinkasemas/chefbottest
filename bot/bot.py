@@ -45,6 +45,7 @@ from backend.database import crud  # noqa: E402
 from backend.database.db import async_session, init_db  # noqa: E402
 from backend.database.models import Favorite, Recipe, RecipeIngredient, RecipeStep, User  # noqa: E402
 from backend.recipe_import import RecipeImportError, download_image_bytes, import_recipe_from_url  # noqa: E402
+from backend.achievements import check_and_unlock  # noqa: E402
 
 WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
 
@@ -53,7 +54,7 @@ WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
 # клиент) агрессивно кэширует саму страницу Mini App по её URL; изменение
 # URL - самый надёжный способ заставить его загрузить свежую версию, не
 # полагаясь на HTTP-кэш и не прося пользователей вручную чистить кэш.
-WEBAPP_VERSION = "6"
+WEBAPP_VERSION = "7"
 
 
 def _webapp_url() -> str:
@@ -484,6 +485,14 @@ async def try_add_recipe_from_url(message: Message):
         f"✅ Рецепт «{html.escape(recipe.name)}» импортирован (id {recipe.id}), {photo_note}.\n"
         f"Источник: {html.escape(url)}"
     )
+
+    async with async_session() as session:
+        newly_unlocked = await check_and_unlock(session, submitter.id)
+    for achievement in newly_unlocked:
+        await message.answer(
+            f"{achievement.emoji} Новая ачивка: <b>{html.escape(achievement.title)}</b>\n"
+            f"{html.escape(achievement.description)}"
+        )
 
 
 # ---------------------------------------------------------------------------
