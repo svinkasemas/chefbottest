@@ -42,6 +42,10 @@ class Category(Base):
     emoji: Mapped[str] = mapped_column(String(8), default="🍽")
     color: Mapped[str] = mapped_column(String(16), default="#B5462F")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # Кто из пользователей первым создал эту категорию (добавив в неё рецепт
+    # с новым названием категории) - для ачивки "Епархия вкуса". None для
+    # категорий из seed_recipes.json.
+    created_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     recipes: Mapped[list["Recipe"]] = relationship(back_populates="category")
 
@@ -73,6 +77,9 @@ class Recipe(Base):
     # которого не было в базе) - для модерации, см. /admin в bot.py.
     # None для рецептов из seed_recipes.json и добавленных вручную админом.
     added_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # Сколько раз рецепт отправляли через кнопку "Поделиться" (см.
+    # POST /api/recipes/{id}/share) - для ачивки "Притча во языцех".
+    share_count: Mapped[int] = mapped_column(Integer, default=0)
 
     time_minutes: Mapped[int] = mapped_column(Integer, default=30)
     difficulty: Mapped[int] = mapped_column(Integer, default=2)  # 1..5
