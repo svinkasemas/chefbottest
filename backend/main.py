@@ -31,6 +31,7 @@ from backend.schemas import (
     AddCustomShoppingItemIn,
     AddToShoppingListIn,
     CategoryOut,
+    CookIn,
     FridgeMatch,
     FridgeMatchIn,
     GenerateRecipeIn,
@@ -43,6 +44,7 @@ from backend.schemas import (
     ToggleFavoriteIn,
 )
 from backend.ai_recipe import RecipeGenerationError, generate_recipe_dict
+from backend.achievements import check_and_unlock, get_unlocked_keys, unlock_instant, ACHIEVEMENTS
 from backend.recipe_import import RecipeImportError, import_recipe_from_url, search_recipe_url
 from backend.utils import scale_amount
 
@@ -449,6 +451,8 @@ async def api_toggle_shopping_item(
     if item is None:
         raise HTTPException(404, "Позиция не найдена")
     item.is_checked = not item.is_checked
+    if item.is_checked:
+        db_user.shopping_items_checked_total += 1
     await db.commit()
     return {"is_checked": item.is_checked}
 
@@ -458,6 +462,102 @@ async def api_clear_checked(db: AsyncSession = Depends(get_db), user: TelegramUs
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     await crud.clear_checked_shopping_items(db, db_user.id)
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Готовка и ачивки
+# ---------------------------------------------------------------------------
+
+@app.post("/api/recipes/{recipe_id}/cook")
+async def api_record_cook(
+    recipe_id: int,
+    payload: CookIn,
+    db: AsyncSession = Depends(get_db),
+    user: TelegramUser = Depends(get_current_user),
+):
+    """
+    Фиксирует завершённое приготовление (кнопка "Готово!" в конце режима
+    готовки) и сразу проверяет, не открылась ли за это новая ачивка.
+    """
+    recipe = await crud.get_recipe_full(db, recipe_id)
+    if recipe is None:
+        raise HTTPException(404, "Рецепт не найден")
+
+    db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+    await crud.record_cook(db, db_user.id, recipe_id, via_random=payload.via_random)
+    newly_unlocked = await check_and_unlock(db, db_user.id)
+    return {
+        "ok": True,
+        "new_achievements": [
+            {"key": a.key, "title": a.title, "description": a.description, "emoji": a.emoji}
+            for a in newly_unlocked
+        ],
+    }
+
+
+@app.get("/api/achievements")
+async def api_achievements(db: AsyncSession = Depends(get_db), user: TelegramUser = Depends(get_current_user)):
+    """
+    Список всех ачивок с отметкой, какие уже разблокированы. Скрытые
+    (is_hidden) до разблокировки отдаются с плейсхолдером вместо
+    названия/описания - см. tpl-achievements в webapp/index.html.
+    """
+    db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+    unlocked = await get_unlocked_keys(db, db_user.id)
+
+    result = []
+    for a in ACHIEVEMENTS:
+        is_unlocked = a.key in unlocked
+        hidden_and_locked = a.is_hidden and not is_unlocked
+        result.append({
+            "key": a.key,
+            "title": "???" if hidden_and_locked else a.title,
+            "description": "Скрытая ачивка - откройте её сами." if hidden_and_locked else a.description,
+            "emoji": "❓" if hidden_and_locked else a.emoji,
+            "category": a.category,
+            "is_hidden": a.is_hidden,
+            "unlocked": is_unlocked,
+        })
+    return result
+
+
+@app.post("/api/achievements/check")
+async def api_check_achievements(db: AsyncSession = Depends(get_db), user: TelegramUser = Depends(get_current_user)):
+    """
+    Пересчитывает "вычисляемые" ачивки на текущий момент - на случай, если
+    какое-то условие выполнилось не через приготовление рецепта (например,
+    "Внести свою лепту"). Безопасно вызывать в любой момент.
+    """
+    db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+    newly_unlocked = await check_and_unlock(db, db_user.id)
+    return {
+        "new_achievements": [
+            {"key": a.key, "title": a.title, "description": a.description, "emoji": a.emoji}
+            for a in newly_unlocked
+        ]
+    }
+
+
+@app.post("/api/achievements/unlock/{key}")
+async def api_unlock_instant_achievement(
+    key: str, db: AsyncSession = Depends(get_db), user: TelegramUser = Depends(get_current_user)
+):
+    """
+    Выдаёт "мгновенную" ачивку по действию на фронтенде (см. INSTANT_KEYS
+    в backend/achievements.py) - например, использование калькулятора
+    порций. Ключи вне этого списка отклоняются.
+    """
+    db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+    achievement = await unlock_instant(db, db_user.id, key)
+    if achievement is None:
+        return {"unlocked": False}
+    return {
+        "unlocked": True,
+        "achievement": {
+            "key": achievement.key, "title": achievement.title,
+            "description": achievement.description, "emoji": achievement.emoji,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
