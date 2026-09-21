@@ -164,6 +164,10 @@ class User(Base):
     # содержащие эти ингредиенты, помечаются как is_restricted во всех
     # списках рецептов, чтобы фронтенд мог их заблюрить с предупреждением.
     dietary_restrictions: Mapped[list] = mapped_column(JSON, default=list)
+    # Свои аллергены/продукты, вписанные вручную (не из готового списка в
+    # backend/dietary.py) - например "кинза". Работают так же, как обычные
+    # ограничения: совпадение по подстроке с названием/ингредиентами рецепта.
+    custom_allergens: Mapped[list] = mapped_column(JSON, default=list)
 
 
 class Favorite(Base):
