@@ -21,6 +21,15 @@ class RecipeShort(BaseModel):
     calories: int
     is_favorite: bool = False
     photo_url: str | None = None
+    # Содержит ингредиент(ы) из пищевых ограничений пользователя (см.
+    # backend/dietary.py) - карточка на фронтенде блюрится с предупреждением.
+    is_restricted: bool = False
+    restricted_labels: list[str] = []
+
+
+class SeasonalShelf(BaseModel):
+    title: str
+    recipes: list[RecipeShort]
 
 
 class IngredientOut(BaseModel):
@@ -57,6 +66,9 @@ class RecipeDetail(BaseModel):
     photo_url: str | None = None
     custom_time_minutes: int | None = None
     source_url: str | None = None
+    personal_note: str | None = None
+    is_restricted: bool = False
+    restricted_labels: list[str] = []
 
 
 class RecipeCustomizationIn(BaseModel):
@@ -122,3 +134,18 @@ class AddCustomShoppingItemIn(BaseModel):
     name: str
     amount: float = 0
     unit: str = ""
+
+
+class RecipeNoteIn(BaseModel):
+    """Тело запроса POST /api/recipes/{id}/note - свободная личная заметка."""
+    note: str = ""
+
+
+class DietaryOptionOut(BaseModel):
+    key: str
+    label: str
+    active: bool
+
+
+class DietarySettingsIn(BaseModel):
+    keys: list[str] = []
