@@ -151,6 +151,14 @@ class User(Base):
     # за всё время (не сбрасывается при очистке списка) - для ачивки
     # "Запасливый", см. backend/achievements.py.
     shopping_items_checked_total: Mapped[int] = mapped_column(Integer, default=0)
+    # Сколько раз пользователь лично нажимал кнопку "Поделиться" рецептом
+    # (в отличие от Recipe.share_count, который считает пересылки любого
+    # рецепта кем угодно) - для ачивки "Правило бойцовского клуба".
+    shares_initiated_total: Mapped[int] = mapped_column(Integer, default=0)
+    # Если задано - пользователь состоит в общем списке покупок (см.
+    # ShoppingGroup) и видит/редактирует список вместе с остальными
+    # участниками, а не только свой собственный.
+    shopping_group_id: Mapped[int | None] = mapped_column(ForeignKey("shopping_groups.id"), nullable=True)
 
 
 class Favorite(Base):
@@ -211,6 +219,24 @@ class CookLog(Base):
     # Был ли рецепт открыт через кнопку "Случайный рецепт" - для ачивки
     # "Шаг в неизвестность".
     via_random: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class ShoppingGroup(Base):
+    """
+    Общий список покупок для "Co-op режима" - см. POST /api/shopping-list/share
+    и /api/shopping-list/join в backend/main.py. Все пользователи с одним
+    и тем же User.shopping_group_id видят и отмечают один и тот же список
+    (ShoppingListItem по-прежнему хранит user_id того, кто добавил конкретный
+    товар - для отображения "кто добавил", но выборка идёт по всем
+    участникам группы, см. crud.get_shopping_member_ids).
+    """
+    __tablename__ = "shopping_groups"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Короткий код приглашения для диплинка t.me/BOT?startapp=join_<код>,
+    # который рассылается через switch_inline_query (см. webapp/app.js).
+    invite_code: Mapped[str] = mapped_column(String(16), unique=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class UserAchievement(Base):
