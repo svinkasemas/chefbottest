@@ -147,5 +147,11 @@ class DietaryOptionOut(BaseModel):
     active: bool
 
 
+class DietarySettingsOut(BaseModel):
+    options: list[DietaryOptionOut]
+    custom: list[str] = []
+
+
 class DietarySettingsIn(BaseModel):
     keys: list[str] = []
+    custom: list[str] = []
