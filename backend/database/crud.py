@@ -10,6 +10,8 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+import secrets
+
 from backend.database.models import (
     Category,
     CookLog,
@@ -19,6 +21,7 @@ from backend.database.models import (
     RecipeCustomization,
     RecipeIngredient,
     RecipeStep,
+    ShoppingGroup,
     ShoppingListItem,
     User,
 )
@@ -376,25 +379,104 @@ async def add_ingredients_to_shopping_list(
     await session.commit()
 
 
-async def get_shopping_list(session: AsyncSession, user_id: int) -> list[ShoppingListItem]:
+# --------------------------------------------------------------------------
+# Co-op режим: общий список покупок (ShoppingGroup) на несколько
+# пользователей. Каждый ShoppingListItem по-прежнему хранит user_id того, кто
+# его добавил, но все операции чтения/изменения списка идут по всем
+# участникам общей группы, а не только по одному user_id - см.
+# get_shopping_member_ids ниже, которую вызывают перед каждым обращением к
+# списку покупок (см. backend/main.py).
+# --------------------------------------------------------------------------
+
+async def get_shopping_member_ids(session: AsyncSession, user_id: int) -> set[int]:
+    """
+    Множество id пользователей, чей список покупок нужно показывать этому
+    пользователю: только он сам, если он ни к какой группе не присоединился,
+    или все участники его ShoppingGroup (включая его самого).
+    """
+    user = await session.get(User, user_id)
+    if user is None or user.shopping_group_id is None:
+        return {user_id}
     result = await session.execute(
-        select(ShoppingListItem)
-        .where(ShoppingListItem.user_id == user_id)
+        select(User.id).where(User.shopping_group_id == user.shopping_group_id)
+    )
+    ids = {row[0] for row in result.all()}
+    ids.add(user_id)
+    return ids
+
+
+async def ensure_shopping_group(session: AsyncSession, user_id: int) -> ShoppingGroup:
+    """
+    Возвращает существующую общую группу пользователя или создаёт новую
+    (с уникальным коротким кодом приглашения) - см. POST /api/shopping-list/share.
+    """
+    user = await session.get(User, user_id)
+    if user.shopping_group_id is not None:
+        group = await session.get(ShoppingGroup, user.shopping_group_id)
+        if group is not None:
+            return group
+
+    for _ in range(10):
+        code = secrets.token_hex(4).upper()
+        existing = (
+            await session.execute(select(ShoppingGroup).where(ShoppingGroup.invite_code == code))
+        ).scalar_one_or_none()
+        if existing is None:
+            break
+    else:
+        raise RuntimeError("Не удалось сгенерировать уникальный код приглашения")
+
+    group = ShoppingGroup(invite_code=code)
+    session.add(group)
+    await session.flush()
+    user.shopping_group_id = group.id
+    await session.commit()
+    return group
+
+
+async def join_shopping_group(session: AsyncSession, user_id: int, invite_code: str) -> ShoppingGroup | None:
+    """Присоединяет пользователя к общей группе по коду из диплинка (startapp=join_<код>)."""
+    group = (
+        await session.execute(select(ShoppingGroup).where(ShoppingGroup.invite_code == invite_code.strip().upper()))
+    ).scalar_one_or_none()
+    if group is None:
+        return None
+    user = await session.get(User, user_id)
+    user.shopping_group_id = group.id
+    await session.commit()
+    return group
+
+
+async def leave_shopping_group(session: AsyncSession, user_id: int) -> None:
+    user = await session.get(User, user_id)
+    if user is not None:
+        user.shopping_group_id = None
+        await session.commit()
+
+
+async def get_shopping_list(session: AsyncSession, member_ids: set[int]) -> list[tuple[ShoppingListItem, User | None]]:
+    """Список покупок всех участников группы вместе с тем, кто каждый товар добавил."""
+    result = await session.execute(
+        select(ShoppingListItem, User)
+        .where(ShoppingListItem.user_id.in_(member_ids))
+        .join(User, User.id == ShoppingListItem.user_id, isouter=True)
         .order_by(ShoppingListItem.is_checked, ShoppingListItem.ingredient_name)
     )
-    return list(result.scalars().all())
+    return [(item, user) for item, user in result.all()]
 
 
-async def get_shopping_item(session: AsyncSession, item_id: int, user_id: int) -> ShoppingListItem | None:
+async def get_shopping_item(session: AsyncSession, item_id: int, member_ids: set[int]) -> ShoppingListItem | None:
     result = await session.execute(
-        select(ShoppingListItem).where(ShoppingListItem.id == item_id, ShoppingListItem.user_id == user_id)
+        select(ShoppingListItem).where(ShoppingListItem.id == item_id, ShoppingListItem.user_id.in_(member_ids))
     )
     return result.scalar_one_or_none()
 
 
-async def clear_checked_shopping_items(session: AsyncSession, user_id: int) -> None:
+async def clear_checked_shopping_items(session: AsyncSession, member_ids: set[int]) -> None:
     result = await session.execute(
-        select(ShoppingListItem).where(ShoppingListItem.user_id == user_id, ShoppingListItem.is_checked.is_(True))
+        select(ShoppingListItem).where(
+            ShoppingListItem.user_id.in_(member_ids), ShoppingListItem.is_checked.is_(True)
+        )
     )
     for item in result.scalars().all():
         await session.delete(item)
