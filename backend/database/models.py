@@ -159,6 +159,11 @@ class User(Base):
     # ShoppingGroup) и видит/редактирует список вместе с остальными
     # участниками, а не только свой собственный.
     shopping_group_id: Mapped[int | None] = mapped_column(ForeignKey("shopping_groups.id"), nullable=True)
+    # Пищевые ограничения/аллергии, отмеченные один раз в настройках профиля
+    # (например ["nuts", "pork"] - ключи из backend/dietary.py). Рецепты,
+    # содержащие эти ингредиенты, помечаются как is_restricted во всех
+    # списках рецептов, чтобы фронтенд мог их заблюрить с предупреждением.
+    dietary_restrictions: Mapped[list] = mapped_column(JSON, default=list)
 
 
 class Favorite(Base):
@@ -199,6 +204,10 @@ class RecipeCustomization(Base):
     # Заметки к шагам: {"3": "добавить лимон"} - ключ это step_number строкой
     # (JSON-объекты всегда со строковыми ключами).
     step_notes: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Свободная личная заметка под рецептом в целом (не привязана к шагу) -
+    # например "Готовил 12 октября, жене понравилось, в следующий раз
+    # добавить больше чеснока". Видна только автору, см. tpl-recipe.
+    personal_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
     )
