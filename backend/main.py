@@ -44,7 +44,7 @@ from backend.schemas import (
     ToggleFavoriteIn,
 )
 from backend.ai_recipe import RecipeGenerationError, generate_recipe_dict
-from backend.achievements import check_and_unlock, get_unlocked_keys, unlock_instant, ACHIEVEMENTS
+from backend.achievements import check_and_unlock, get_unlocked_keys, unlock_instant, ACHIEVEMENTS, DESKTOP_PLATFORMS
 from backend.recipe_import import RecipeImportError, import_recipe_from_url, search_recipe_url
 from backend.utils import scale_amount
 
@@ -248,6 +248,8 @@ async def api_save_recipe_customization(
 
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     await crud.save_recipe_customization(db, db_user.id, recipe_id, payload.time_minutes, payload.step_notes)
+    if payload.platform in DESKTOP_PLATFORMS:
+        await unlock_instant(db, db_user.id, "remote_access")
     newly_unlocked = await check_and_unlock(db, db_user.id)
     return {
         "ok": True,
@@ -344,6 +346,8 @@ async def api_generate_recipe(
     recipe = await crud.create_recipe_from_ai_data(
         db, data, source_url=source_url, added_by_user_id=db_user.id
     )
+    if payload.platform in DESKTOP_PLATFORMS:
+        await unlock_instant(db, db_user.id, "remote_access")
     await check_and_unlock(db, db_user.id)
     recipe_full = await crud.get_recipe_full(db, recipe.id)
     return recipe_to_short(recipe_full, favorite_ids)
@@ -529,7 +533,11 @@ async def api_achievements(db: AsyncSession = Depends(get_db), user: TelegramUse
     result = []
     for a in ACHIEVEMENTS:
         is_unlocked = a.key in unlocked
-        hidden_and_locked = a.is_hidden and not is_unlocked
+        prerequisites_met = all(p in unlocked for p in a.prerequisite_keys)
+        # Ачивка с ещё не открытым "предком" ведёт себя как скрытая - её
+        # существование не палим, пока предок не разблокирован (см.
+        # prerequisite_keys в backend/achievements.py).
+        hidden_and_locked = (a.is_hidden or not prerequisites_met) and not is_unlocked
         result.append({
             "key": a.key,
             "title": "???" if hidden_and_locked else a.title,
