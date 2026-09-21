@@ -20,6 +20,7 @@ import html
 import json
 import logging
 import os
+import re
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -31,6 +32,9 @@ from aiogram.types import (
     BufferedInputFile,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
     Message,
     MenuButtonWebApp,
     WebAppInfo,
@@ -40,7 +44,7 @@ from sqlalchemy import select
 
 load_dotenv()
 
-from backend.config import ADMIN_IDS, BOT_TOKEN, PHOTOS_DIR, PROXY_URL  # noqa: E402
+from backend.config import ADMIN_IDS, BOT_TOKEN, BOT_USERNAME, PHOTOS_DIR, PROXY_URL  # noqa: E402
 from backend.database import crud  # noqa: E402
 from backend.database.db import async_session, init_db  # noqa: E402
 from backend.database.models import Favorite, Recipe, RecipeIngredient, RecipeStep, User  # noqa: E402
@@ -54,7 +58,7 @@ WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
 # клиент) агрессивно кэширует саму страницу Mini App по её URL; изменение
 # URL - самый надёжный способ заставить его загрузить свежую версию, не
 # полагаясь на HTTP-кэш и не прося пользователей вручную чистить кэш.
-WEBAPP_VERSION = "8"
+WEBAPP_VERSION = "10"
 
 
 def _webapp_url() -> str:
@@ -109,6 +113,48 @@ async def cmd_start(message: Message):
         "и я добавлю его в общую базу.",
         reply_markup=open_app_kb(),
     )
+
+
+# ---------------------------------------------------------------------------
+# Общий список покупок (Co-op режим): switch_inline_query из Mini App
+# ---------------------------------------------------------------------------
+
+@dp.inline_query()
+async def inline_share_shopping_list(inline_query: InlineQuery):
+    """
+    Обрабатывает inline-запрос, который открывается кнопкой "Поделиться
+    списком" на экране покупок в Mini App через tg.switchInlineQuery(...)
+    (см. webapp/app.js). Пользователь выбирает чат (с партнёром/семьёй),
+    и туда уходит сообщение со ссылкой на общий список покупок - тот, кто
+    его откроет, присоединится к той же ShoppingGroup, см.
+    POST /api/shopping-list/join в backend/main.py.
+
+    Текст запроса всегда имеет вид "join_<код>" - его формирует фронтенд
+    из кода приглашения, полученного через POST /api/shopping-list/share.
+    """
+    query_text = (inline_query.query or "").strip()
+    match = re.match(r"^join_([A-Za-z0-9]+)$", query_text)
+    if not match or not BOT_USERNAME:
+        await inline_query.answer([], cache_time=1, is_personal=True)
+        return
+
+    code = match.group(1)
+    deep_link = f"https://t.me/{BOT_USERNAME}?startapp=join_{code}"
+    result = InlineQueryResultArticle(
+        id=f"shopping_{code}",
+        title="🛒 Общий список покупок",
+        description="Нажмите, чтобы присоединиться и готовить покупки вместе",
+        input_message_content=InputTextMessageContent(
+            message_text=(
+                "🛒 <b>Приглашение в общий список покупок ChefBot</b>\n"
+                "Открой список — отметки в нём видны всем участникам в реальном времени."
+            ),
+        ),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[[InlineKeyboardButton(text="🛒 Открыть общий список", url=deep_link)]]
+        ),
+    )
+    await inline_query.answer([result], cache_time=1, is_personal=True)
 
 
 # ---------------------------------------------------------------------------
