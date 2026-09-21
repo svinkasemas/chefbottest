@@ -36,6 +36,7 @@ from backend.schemas import (
     FridgeMatchIn,
     GenerateRecipeIn,
     IngredientOut,
+    JoinShoppingGroupIn,
     RecipeCustomizationIn,
     RecipeDetail,
     RecipeShort,
@@ -454,14 +455,26 @@ async def api_toggle_favorite(
 # Список покупок
 # ---------------------------------------------------------------------------
 
-@app.get("/api/shopping-list", response_model=list[ShoppingItemOut])
+@app.get("/api/shopping-list")
 async def api_get_shopping_list(db: AsyncSession = Depends(get_db), user: TelegramUser = Depends(get_current_user)):
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
-    items = await crud.get_shopping_list(db, db_user.id)
-    return [
-        ShoppingItemOut(id=i.id, ingredient_name=i.ingredient_name, amount=i.amount, unit=i.unit, is_checked=i.is_checked)
-        for i in items
-    ]
+    member_ids = await crud.get_shopping_member_ids(db, db_user.id)
+    items = await crud.get_shopping_list(db, member_ids)
+    is_shared = db_user.shopping_group_id is not None
+    return {
+        "items": [
+            ShoppingItemOut(
+                id=i.id, ingredient_name=i.ingredient_name, amount=i.amount, unit=i.unit,
+                is_checked=i.is_checked,
+                # Имя того, кто добавил, показываем только если список общий -
+                # в личном списке это и так всегда сам пользователь.
+                added_by_name=((adder.full_name or adder.username) if (is_shared and adder) else None),
+            )
+            for i, adder in items
+        ],
+        "is_shared": is_shared,
+        "member_count": len(member_ids),
+    }
 
 
 @app.post("/api/shopping-list/add-recipe")
@@ -515,7 +528,8 @@ async def api_toggle_shopping_item(
     user: TelegramUser = Depends(get_current_user),
 ):
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
-    item = await crud.get_shopping_item(db, item_id, db_user.id)
+    member_ids = await crud.get_shopping_member_ids(db, db_user.id)
+    item = await crud.get_shopping_item(db, item_id, member_ids)
     if item is None:
         raise HTTPException(404, "Позиция не найдена")
     item.is_checked = not item.is_checked
@@ -528,7 +542,8 @@ async def api_toggle_shopping_item(
 @app.post("/api/shopping-list/clear-checked")
 async def api_clear_checked(db: AsyncSession = Depends(get_db), user: TelegramUser = Depends(get_current_user)):
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
-    await crud.clear_checked_shopping_items(db, db_user.id)
+    member_ids = await crud.get_shopping_member_ids(db, db_user.id)
+    await crud.clear_checked_shopping_items(db, member_ids)
     # Стоит проверить после очистки - список покупок мог "сойтись" ровно к
     # двум оставшимся позициям (см., например, ачивку "Кто убил Лору Палмер?").
     newly_unlocked = await check_and_unlock(db, db_user.id)
@@ -539,6 +554,41 @@ async def api_clear_checked(db: AsyncSession = Depends(get_db), user: TelegramUs
             for a in newly_unlocked
         ],
     }
+
+
+@app.post("/api/shopping-list/share")
+async def api_share_shopping_list(db: AsyncSession = Depends(get_db), user: TelegramUser = Depends(get_current_user)):
+    """
+    Готовит общий список покупок (Co-op режим): создаёт (или возвращает уже
+    существующую) ShoppingGroup для этого пользователя с кодом приглашения.
+    Фронтенд передаёт код через tg.switchInlineQuery(...) - партнёр, который
+    выберет чат и откроет присланное ботом сообщение, перейдёт по диплинку
+    t.me/BOT?startapp=join_<код> и присоединится, см. POST .../join и
+    startParam-парсинг в webapp/app.js.
+    """
+    db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+    group = await crud.ensure_shopping_group(db, db_user.id)
+    return {"invite_code": group.invite_code}
+
+
+@app.post("/api/shopping-list/join")
+async def api_join_shopping_list(
+    payload: JoinShoppingGroupIn, db: AsyncSession = Depends(get_db), user: TelegramUser = Depends(get_current_user)
+):
+    db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+    group = await crud.join_shopping_group(db, db_user.id, payload.invite_code)
+    if group is None:
+        raise HTTPException(404, "Приглашение недействительно")
+    member_ids = await crud.get_shopping_member_ids(db, db_user.id)
+    return {"ok": True, "member_count": len(member_ids)}
+
+
+@app.post("/api/shopping-list/leave")
+async def api_leave_shopping_list(db: AsyncSession = Depends(get_db), user: TelegramUser = Depends(get_current_user)):
+    """Выйти из общего списка обратно к своему личному."""
+    db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+    await crud.leave_shopping_group(db, db_user.id)
+    return {"ok": True}
 
 
 # ---------------------------------------------------------------------------
