@@ -47,20 +47,28 @@ DIETARY_OPTIONS: dict[str, dict[str, object]] = {
 }
 
 
-def restriction_labels_for(recipe_text: str, active_keys: list[str]) -> list[str]:
+MAX_CUSTOM_ALLERGENS = 10
+
+
+def restriction_labels_for(
+    recipe_text: str, active_keys: list[str], custom_keywords: list[str] | None = None
+) -> list[str]:
     """
     recipe_text - объединённый в один нижний регистр текст названия рецепта
     и всех его ингредиентов. Возвращает названия ограничений (для показа в
-    предупреждении), которым соответствует этот рецепт, из числа активных
-    у пользователя ключей.
+    предупреждении), которым соответствует этот рецепт: из числа активных
+    у пользователя ключей (готовый список DIETARY_OPTIONS) и/или его
+    собственных, вписанных вручную продуктов (custom_keywords, уже в нижнем
+    регистре - см. User.custom_allergens).
     """
-    if not active_keys:
-        return []
     labels = []
-    for key in active_keys:
+    for key in active_keys or []:
         option = DIETARY_OPTIONS.get(key)
         if not option:
             continue
         if any(kw in recipe_text for kw in option["keywords"]):
             labels.append(option["label"])
+    for kw in custom_keywords or []:
+        if kw and kw in recipe_text:
+            labels.append(kw.capitalize())
     return labels
