@@ -226,7 +226,10 @@ async def get_recipes_by_category(session: AsyncSession, category_id: int) -> li
     result = await session.execute(
         select(Recipe)
         .where(Recipe.category_id == category_id, Recipe.is_active.is_(True))
-        .options(selectinload(Recipe.category))
+        .options(
+            selectinload(Recipe.category),
+            selectinload(Recipe.ingredient_links).selectinload(RecipeIngredient.ingredient),
+        )
         .order_by(Recipe.name)
     )
     return list(result.scalars().all())
@@ -246,10 +249,14 @@ async def get_recipe_full(session: AsyncSession, recipe_id: int) -> Recipe | Non
 
 
 async def search_recipes(session: AsyncSession, query: str, limit: int = 30) -> list[Recipe]:
+    ingredient_opts = (
+        selectinload(Recipe.category),
+        selectinload(Recipe.ingredient_links).selectinload(RecipeIngredient.ingredient),
+    )
     by_name = await session.execute(
         select(Recipe)
         .where(Recipe.name.ilike(f"%{query}%"), Recipe.is_active.is_(True))
-        .options(selectinload(Recipe.category))
+        .options(*ingredient_opts)
         .order_by(Recipe.name)
         .limit(limit)
     )
@@ -258,7 +265,7 @@ async def search_recipes(session: AsyncSession, query: str, limit: int = 30) -> 
         .join(RecipeIngredient, RecipeIngredient.recipe_id == Recipe.id)
         .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
         .where(Ingredient.name.ilike(f"%{query.lower()}%"), Recipe.is_active.is_(True))
-        .options(selectinload(Recipe.category))
+        .options(*ingredient_opts)
         .order_by(Recipe.name)
         .distinct()
         .limit(limit)
@@ -268,6 +275,47 @@ async def search_recipes(session: AsyncSession, query: str, limit: int = 30) -> 
         if r.id not in seen:
             seen.add(r.id)
             combined.append(r)
+    return combined[:limit]
+
+
+async def get_seasonal_recipes(session: AsyncSession, keywords: list[str], limit: int = 10) -> list[Recipe]:
+    """
+    Рецепты для сезонной подборки на главном экране (см. backend/seasonal.py
+    и GET /api/home/seasonal) - ищем по названию рецепта или по ингредиентам,
+    как в search_recipes, но по нескольким ключевым словам сразу.
+    """
+    from sqlalchemy import or_
+
+    ingredient_opts = (
+        selectinload(Recipe.category),
+        selectinload(Recipe.ingredient_links).selectinload(RecipeIngredient.ingredient),
+    )
+    name_conditions = [Recipe.name.ilike(f"%{kw}%") for kw in keywords]
+    by_name = await session.execute(
+        select(Recipe)
+        .where(or_(*name_conditions), Recipe.is_active.is_(True))
+        .options(*ingredient_opts)
+        .order_by(Recipe.name)
+        .limit(limit)
+    )
+    combined = list(by_name.scalars().all())
+    if len(combined) < limit:
+        ingredient_conditions = [Ingredient.name.ilike(f"%{kw}%") for kw in keywords]
+        by_ingredient = await session.execute(
+            select(Recipe)
+            .join(RecipeIngredient, RecipeIngredient.recipe_id == Recipe.id)
+            .join(Ingredient, Ingredient.id == RecipeIngredient.ingredient_id)
+            .where(or_(*ingredient_conditions), Recipe.is_active.is_(True))
+            .options(*ingredient_opts)
+            .order_by(Recipe.name)
+            .distinct()
+            .limit(limit)
+        )
+        seen = {r.id for r in combined}
+        for r in by_ingredient.scalars().all():
+            if r.id not in seen:
+                seen.add(r.id)
+                combined.append(r)
     return combined[:limit]
 
 
@@ -346,7 +394,10 @@ async def get_favorites(session: AsyncSession, user_id: int) -> list[Recipe]:
         select(Recipe)
         .join(Favorite, Favorite.recipe_id == Recipe.id)
         .where(Favorite.user_id == user_id)
-        .options(selectinload(Recipe.category))
+        .options(
+            selectinload(Recipe.category),
+            selectinload(Recipe.ingredient_links).selectinload(RecipeIngredient.ingredient),
+        )
         .order_by(Recipe.name)
     )
     return list(result.scalars().all())
@@ -521,6 +572,36 @@ async def save_recipe_customization(
 
     existing.custom_time_minutes = time_minutes
     existing.step_notes = clean_notes
+    await session.commit()
+    return existing
+
+
+async def save_recipe_note(session: AsyncSession, user_id: int, recipe_id: int, note: str | None) -> RecipeCustomization | None:
+    """
+    Сохраняет свободную личную заметку под рецептом (см. RecipeCustomization.
+    personal_note) - независимо от "правок" (custom_time_minutes/step_notes),
+    которые редактируются отдельно на экране "Мои правки". Если после
+    сохранения у записи не осталось вообще ничего (ни заметки, ни правок),
+    запись удаляется целиком, как и в save_recipe_customization.
+    """
+    clean_note = note.strip() if note else None
+    existing = await get_recipe_customization(session, user_id, recipe_id)
+
+    if not clean_note:
+        if existing is not None:
+            existing.personal_note = None
+            if existing.custom_time_minutes is None and not existing.step_notes:
+                await session.delete(existing)
+                await session.commit()
+                return None
+            await session.commit()
+        return existing
+
+    if existing is None:
+        existing = RecipeCustomization(user_id=user_id, recipe_id=recipe_id)
+        session.add(existing)
+
+    existing.personal_note = clean_note
     await session.commit()
     return existing
 
