@@ -67,6 +67,7 @@ class RecipeCustomizationIn(BaseModel):
     """
     time_minutes: int | None = None
     step_notes: dict[str, str] = {}
+    platform: str | None = None
 
 
 class CookIn(BaseModel):
@@ -96,6 +97,9 @@ class ToggleFavoriteIn(BaseModel):
 
 class GenerateRecipeIn(BaseModel):
     name: str
+    # Платформа Telegram-клиента (tg.platform на фронтенде) - для ачивки
+    # "Удалённый доступ" за работу с десктопа, см. backend/achievements.py.
+    platform: str | None = None
 
 
 class FridgeMatchIn(BaseModel):
