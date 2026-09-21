@@ -1065,8 +1065,12 @@ async def build_context(session: AsyncSession, user_id: int) -> AchievementConte
 
     favorite_recipes = await crud.get_favorites_with_dates(session, user_id)
 
+    # В Co-op режиме (общий список покупок, см. ShoppingGroup) ачивки вроде
+    # "Кто убил Лору Палмер?" должны видеть список таким, каким его видит сам
+    # пользователь - то есть общий, а не только то, что добавил лично он.
+    member_ids = await crud.get_shopping_member_ids(session, user_id)
     shopping_items = list((
-        await session.execute(select(ShoppingListItem).where(ShoppingListItem.user_id == user_id))
+        await session.execute(select(ShoppingListItem).where(ShoppingListItem.user_id.in_(member_ids)))
     ).scalars().all())
 
     account_age_days = (datetime.utcnow() - user.created_at).days if user and user.created_at else 0
