@@ -266,10 +266,12 @@ async def api_share_recipe(
 ):
     """
     Фиксирует, что рецепт отправили через кнопку "Поделиться" (для ачивки
-    "Притча во языцех"). Считаем общее число пересылок рецепта, кто бы его
-    ни отправил - не только автор.
+    "Притча во языцех" - общее число пересылок рецепта, кто бы его ни
+    отправил, и "Правило бойцовского клуба" - персональный счётчик того,
+    что именно этот пользователь хоть раз поделился).
     """
-    await crud.increment_share_count(db, recipe_id)
+    db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+    await crud.record_share(db, db_user.id, recipe_id)
     return {"ok": True}
 
 
@@ -410,6 +412,9 @@ async def api_favorites(db: AsyncSession = Depends(get_db), user: TelegramUser =
     return [recipe_to_short(r, favorite_ids) for r in recipes]
 
 
+_SEAFOOD_KEYWORDS = ["рыба", "лосось", "треска", "судак", "сельдь", "форель", "тунец", "скумбри", "кальмар", "креветк", "морепродукт", "мидии", "краб", "осьминог"]
+
+
 @app.post("/api/favorites/toggle")
 async def api_toggle_favorite(
     payload: ToggleFavoriteIn,
@@ -417,8 +422,32 @@ async def api_toggle_favorite(
     user: TelegramUser = Depends(get_current_user),
 ):
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
+
+    # Для ачивки "Слёзы Сквидварда" нужно поймать момент, когда пользователь
+    # убирает из избранного морепродукты, которые сам же и добавил в базу -
+    # после toggle_favorite это уже нельзя будет определить постфактум.
+    removing_own_seafood = False
+    if payload.recipe_id in await crud.get_favorite_ids(db, db_user.id):
+        recipe = await crud.get_recipe_full(db, payload.recipe_id)
+        if recipe is not None and recipe.added_by_user_id == db_user.id:
+            ingredient_names = [link.ingredient.name.lower() for link in recipe.ingredient_links]
+            text = " ".join([recipe.name.lower()] + ingredient_names)
+            removing_own_seafood = any(kw in text for kw in _SEAFOOD_KEYWORDS)
+
     now_favorite = await crud.toggle_favorite(db, db_user.id, payload.recipe_id)
-    return {"is_favorite": now_favorite}
+    instant_achievement = None
+    if removing_own_seafood and not now_favorite:
+        instant_achievement = await unlock_instant(db, db_user.id, "squidwards_tears")
+    newly_unlocked = await check_and_unlock(db, db_user.id)
+    if instant_achievement is not None:
+        newly_unlocked = [instant_achievement] + newly_unlocked
+    return {
+        "is_favorite": now_favorite,
+        "new_achievements": [
+            {"key": a.key, "title": a.title, "description": a.description, "emoji": a.emoji}
+            for a in newly_unlocked
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -451,7 +480,14 @@ async def api_add_recipe_to_shopping_list(
         for link in recipe.ingredient_links
     ]
     await crud.add_ingredients_to_shopping_list(db, db_user.id, items)
-    return {"added": len(items)}
+    newly_unlocked = await check_and_unlock(db, db_user.id)
+    return {
+        "added": len(items),
+        "new_achievements": [
+            {"key": a.key, "title": a.title, "description": a.description, "emoji": a.emoji}
+            for a in newly_unlocked
+        ],
+    }
 
 
 @app.post("/api/shopping-list/add-item")
@@ -462,7 +498,14 @@ async def api_add_custom_item(
 ):
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     await crud.add_ingredients_to_shopping_list(db, db_user.id, [(payload.name, payload.amount, payload.unit)])
-    return {"ok": True}
+    newly_unlocked = await check_and_unlock(db, db_user.id)
+    return {
+        "ok": True,
+        "new_achievements": [
+            {"key": a.key, "title": a.title, "description": a.description, "emoji": a.emoji}
+            for a in newly_unlocked
+        ],
+    }
 
 
 @app.post("/api/shopping-list/{item_id}/toggle")
@@ -486,7 +529,16 @@ async def api_toggle_shopping_item(
 async def api_clear_checked(db: AsyncSession = Depends(get_db), user: TelegramUser = Depends(get_current_user)):
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     await crud.clear_checked_shopping_items(db, db_user.id)
-    return {"ok": True}
+    # Стоит проверить после очистки - список покупок мог "сойтись" ровно к
+    # двум оставшимся позициям (см., например, ачивку "Кто убил Лору Палмер?").
+    newly_unlocked = await check_and_unlock(db, db_user.id)
+    return {
+        "ok": True,
+        "new_achievements": [
+            {"key": a.key, "title": a.title, "description": a.description, "emoji": a.emoji}
+            for a in newly_unlocked
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
