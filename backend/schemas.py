@@ -89,6 +89,13 @@ class ShoppingItemOut(BaseModel):
     amount: float
     unit: str
     is_checked: bool
+    # Кто добавил товар - имя показывается только в общем списке покупок
+    # (Co-op режим), см. GET /api/shopping-list.
+    added_by_name: str | None = None
+
+
+class JoinShoppingGroupIn(BaseModel):
+    invite_code: str
 
 
 class ToggleFavoriteIn(BaseModel):
