@@ -349,6 +349,25 @@ async def get_favorites(session: AsyncSession, user_id: int) -> list[Recipe]:
     return list(result.scalars().all())
 
 
+async def get_favorites_with_dates(session: AsyncSession, user_id: int) -> list[tuple[Favorite, Recipe]]:
+    """
+    Избранное вместе с полными данными рецепта (ингредиенты, категория) и
+    датой добавления в избранное - для ачивок, которым важен не просто факт
+    добавления в избранное, а состав блюда и/или когда это было сделано
+    (см. backend/achievements.py).
+    """
+    result = await session.execute(
+        select(Favorite, Recipe)
+        .join(Recipe, Recipe.id == Favorite.recipe_id)
+        .where(Favorite.user_id == user_id)
+        .options(
+            selectinload(Recipe.ingredient_links).selectinload(RecipeIngredient.ingredient),
+            selectinload(Recipe.category),
+        )
+    )
+    return [(fav, recipe) for fav, recipe in result.all()]
+
+
 async def add_ingredients_to_shopping_list(
     session: AsyncSession, user_id: int, ingredients: list[tuple[str, float, str]]
 ) -> None:
@@ -529,3 +548,18 @@ async def increment_share_count(session: AsyncSession, recipe_id: int) -> None:
     if recipe is not None:
         recipe.share_count += 1
         await session.commit()
+
+
+async def record_share(session: AsyncSession, user_id: int, recipe_id: int) -> None:
+    """
+    То же самое, что increment_share_count, плюс личный счётчик пользователя
+    (для ачивки "Правило бойцовского клуба" - важно, что именно этот
+    человек ни разу не делился, а не что рецепт вообще не пересылали).
+    """
+    recipe = await session.get(Recipe, recipe_id)
+    if recipe is not None:
+        recipe.share_count += 1
+    user = await session.get(User, user_id)
+    if user is not None:
+        user.shares_initiated_total += 1
+    await session.commit()
