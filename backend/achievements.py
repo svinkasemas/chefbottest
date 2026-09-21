@@ -17,6 +17,12 @@ POST /api/recipes/{id}/cook в backend/main.py).
 Скрытые ачивки (is_hidden=True) не показывают название/описание, пока не
 разблокированы - на фронтенде отображаются как "???" (см. tpl-achievements
 в webapp/index.html).
+
+Ачивка может требовать, чтобы другая (или несколько других) уже была
+разблокирована - см. поле prerequisite_keys. Пока хоть одна из них не
+выдана, check() для этой ачивки даже не вызывается (проверять нечего -
+условие считается невыполненным). Так делаются "цепочки" вида "сначала
+базовая ачивка, потом её более узкая продвинутая версия".
 """
 from __future__ import annotations
 
@@ -40,7 +46,12 @@ from backend.database.models import (
     UserAchievement,
 )
 
-INSTANT_KEYS = {"tactic_garrison"}
+INSTANT_KEYS = {"tactic_garrison", "remote_access"}
+
+# Платформы Telegram-клиента (tg.platform на фронтенде), которые считаем
+# "десктопом" - для ачивки "Удалённый доступ". "weba"/"webk" (веб-версия)
+# сознательно не включены - с браузера могут заходить и с телефона тоже.
+DESKTOP_PLATFORMS = {"tdesktop", "macos"}
 
 
 # --------------------------------------------------------------------------- Ключевые слова для определения состава блюда по названиям ингредиентов.
@@ -71,9 +82,37 @@ _ZITI_NAME_KEYWORDS = ["зити", "лазанья"]
 _CHRISTMAS_NAME_KEYWORDS = ["имбирн", "глинтвейн", "рождеств", "новогодн"]
 _DRINKS_SNACKS_CATEGORY_KEYWORDS = ["напитки", "закуски"]
 
+# --- Ключевые слова для второй партии тематических ачивок -----------------
+_ALT_CUTS_KEYWORDS = ["мачете", "фланк", "скёрт", "скерт", "денвер"]
+_TEMP_KEYWORDS = [
+    "°c", "° c", "градус", "rare", "medium", "well done", "well-done", "медиум", "прожарк",
+]
+_MARINADE_LONG_KEYWORDS = ["сутки", "суток", "24 час"]
+_CAPICOLA_SANDWICH_KEYWORDS = ["капикола", "прошутто", "проволоне"]
+_LAMB_KEYWORDS = ["баранина", "ягнён", "ягнят"]
+_GRILL_KEYWORDS = ["гриль", "мангал", "открытый огонь", "углях", "углях"]
+_PATE_KEYWORDS = ["паштет", "рийет", "намазка"]
+_PIZZA_NAME_KEYWORDS = ["пицца"]
+_CHEESE_KEYWORD = ["сыр"]
+_BURGER_NAME_KEYWORDS = ["бургер"]
+_SECRET_KEYWORDS = ["секрет"]
+_MILKSHAKE_KEYWORDS = ["коктейль молочный", "милкшейк", "молочный коктейль"]
+_BACON_KEYWORDS = ["бекон"]
+_PANCAKE_KEYWORDS = ["блин", "панкейк"]
+_TEA_NAME_KEYWORDS = ["чай"]
+_ROYALE_KEYWORDS = ["роял", "royale"]
+
 
 def _ingredient_names(recipe: Recipe) -> list[str]:
     return [link.ingredient.name.lower() for link in recipe.ingredient_links]
+
+
+def _all_text(recipe: Recipe) -> str:
+    """Название + описание + ингредиенты + текст шагов, одной строкой в нижнем регистре."""
+    parts = [recipe.name or "", recipe.description or ""]
+    parts.extend(_ingredient_names(recipe))
+    parts.extend(s.text or "" for s in getattr(recipe, "steps", []) or [])
+    return " ".join(parts).lower()
 
 
 def _any_keyword(text_list: list[str], keywords: list[str]) -> bool:
@@ -142,6 +181,9 @@ class Achievement:
     category: str
     is_hidden: bool = False
     check: Callable[[AchievementContext], bool] = None
+    # Другие ачивки (по ключу), которые должны быть уже разблокированы,
+    # прежде чем условие этой вообще начнёт проверяться - см. docstring файла.
+    prerequisite_keys: tuple[str, ...] = ()
 
 
 ACHIEVEMENTS: list[Achievement] = [
@@ -403,12 +445,184 @@ ACHIEVEMENTS: list[Achievement] = [
         check=lambda c: c.has_note_on_own_recipe,
     ),
 
+    # --- Мясная кухня (профильные) ------------------------------------------
+    Achievement(
+        "meat_sommelier", "Мясной сомелье",
+        "Добавьте 10 рецептов с альтернативными отрубами (мачете, фланк, скёрт, денвер).",
+        "🥩", "Мясная кухня",
+        prerequisite_keys=("meat_baron",),
+        check=lambda c: c.own_count_where(lambda r: _any_keyword(_ingredient_names(r), _ALT_CUTS_KEYWORDS)) >= 10,
+    ),
+    Achievement(
+        "grill_maestro", "Маэстро прожарки",
+        "Укажите точную температуру или степень прожарки мяса в 5 рецептах.",
+        "🌡", "Мясная кухня",
+        check=lambda c: c.own_count_where(lambda r: _any_keyword([_all_text(r)], _TEMP_KEYWORDS)) >= 5,
+    ),
+    Achievement(
+        "marinade_alchemy", "Алхимия маринада",
+        "Добавьте рецепт, где маринование занимает более 24 часов.",
+        "🧫", "Мясная кухня",
+        check=lambda c: c.own_count_where(
+            lambda r: "марин" in _all_text(r) and _any_keyword([_all_text(r)], _MARINADE_LONG_KEYWORDS)
+        ) >= 1,
+    ),
+
+    # --- Поп-культура (пасхалки по названию/составу) ------------------------
+    Achievement(
+        "pizza_party", "Кавабанга!",
+        "Добавьте 4 разных рецепта пиццы.",
+        "🍕", "Поп-культура",
+        check=lambda c: c.own_count_where(lambda r: _any_keyword([r.name.lower()], _PIZZA_NAME_KEYWORDS)) >= 4,
+    ),
+    Achievement(
+        "secret_ingredient_nothing", "Секретный ингредиент — ничего",
+        "Приготовьте суп или бульон из 3 ингредиентов или меньше.",
+        "🥣", "Поп-культура",
+        check=lambda c: c.count_where(
+            lambda r: r.category is not None and "перв" in r.category.name.lower() and len(r.ingredient_links) <= 3
+        ) >= 1,
+    ),
+    Achievement(
+        "spicy_weasel", "Пряная ласка",
+        "Добавьте рецепт с 7 и более разными специями.",
+        "🌶", "Поп-культура",
+        check=lambda c: c.own_count_where(
+            lambda r: len({n for n in _ingredient_names(r) if _any_keyword([n], _SPICE_KEYWORDS)}) >= 7
+        ) >= 1,
+    ),
+    Achievement(
+        "scooby_snack", "Скуби-Снэк",
+        "Добавьте бутерброд или бургер из 10 и более ингредиентов.",
+        "🥪", "Поп-культура",
+        check=lambda c: c.own_count_where(
+            lambda r: _any_keyword([r.name.lower()], _BURGER_NAME_KEYWORDS + ["сэндвич", "бутерброд"])
+            and len(r.ingredient_links) >= 10
+        ) >= 1,
+    ),
+    Achievement(
+        "lembas_bread", "Второе пришествие Лембаса",
+        "Добавьте выпечку с калорийностью от 600 ккал.",
+        "🍞", "Поп-культура",
+        check=lambda c: c.own_count_where(
+            lambda r: r.category is not None and "выпечк" in r.category.name.lower() and r.calories >= 600
+        ) >= 1,
+    ),
+    Achievement(
+        "five_dollar_shake", "Пятидолларовый шейк",
+        "Добавьте молочный коктейль из 5 и более ингредиентов.",
+        "🥤", "Поп-культура",
+        check=lambda c: c.own_count_where(
+            lambda r: _any_keyword([r.name.lower()], _MILKSHAKE_KEYWORDS) and len(r.ingredient_links) >= 5
+        ) >= 1,
+    ),
+    Achievement(
+        "ogres_have_layers", "Огры имеют слои",
+        "Добавьте рецепт, где лук упоминается 4 и более раз.",
+        "🧅", "Поп-культура",
+        check=lambda c: c.own_count_where(lambda r: _all_text(r).count("лук") >= 4) >= 1,
+    ),
+    Achievement(
+        "pancakes_and_bacon", "Блинчики с беконом",
+        "Добавьте рецепт ровно из блинов и бекона.",
+        "🥓", "Поп-культура",
+        check=lambda c: c.own_count_where(
+            lambda r: len(r.ingredient_links) == 2
+            and _any_keyword(_ingredient_names(r), _PANCAKE_KEYWORDS)
+            and _any_keyword(_ingredient_names(r), _BACON_KEYWORDS)
+        ) >= 1,
+    ),
+    Achievement(
+        "cheese_moon", "Сырная луна",
+        "Добавьте рецепт с 4 и более разными сортами сыра.",
+        "🧀", "Поп-культура",
+        check=lambda c: c.own_count_where(
+            lambda r: len({n for n in _ingredient_names(r) if _any_keyword([n], _CHEESE_KEYWORD)}) >= 4
+        ) >= 1,
+    ),
+    Achievement(
+        "royale_with_cheese", "Метрическая система",
+        "Добавьте рецепт чизбургера со словом «Роял» в названии или составе.",
+        "🍔", "Поп-культура",
+        check=lambda c: c.own_count_where(lambda r: _any_keyword([_all_text(r)], _ROYALE_KEYWORDS)) >= 1,
+    ),
+    Achievement(
+        "jasmine_dragon", "Жасминовый дракон",
+        "Добавьте 3 разных рецепта заварочного чая в категорию «Напитки».",
+        "🍵", "Поп-культура",
+        check=lambda c: c.own_count_where(
+            lambda r: r.category is not None and "напитки" in r.category.name.lower()
+            and _any_keyword([r.name.lower()], _TEA_NAME_KEYWORDS)
+        ) >= 3,
+    ),
+    Achievement(
+        "bobs_burger", "Бургер от Боба",
+        "Добавьте бургер с названием длиннее 35 символов.",
+        "🍟", "Поп-культура",
+        check=lambda c: c.own_count_where(
+            lambda r: _any_keyword([r.name.lower()], _BURGER_NAME_KEYWORDS) and len(r.name) > 35
+        ) >= 1,
+    ),
+    Achievement(
+        "secret_formula", "Секретная формула",
+        "Добавьте бургер с ингредиентом «секретный соус» без граммовки.",
+        "🦀", "Поп-культура",
+        check=lambda c: c.own_count_where(
+            lambda r: _any_keyword([r.name.lower()], _BURGER_NAME_KEYWORDS)
+            and _any_keyword(_ingredient_names(r), _SECRET_KEYWORDS)
+        ) >= 1,
+    ),
+
     # --- Скрытые (пасхалки) ------------------------------------------------
     Achievement(
         "groundhog_day", "День сурка",
         "Готовьте одно и то же блюдо 3 дня подряд.",
         "🔁", "Пасхалки", is_hidden=True,
         check=lambda c: c.max_same_recipe_streak >= 3,
+    ),
+    Achievement(
+        "gabagool", "Габагул!",
+        "Добавьте сэндвич с капиколой, прошутто и проволоне одновременно.",
+        "🥪", "Пасхалки", is_hidden=True,
+        check=lambda c: c.own_count_where(
+            lambda r: all(kw in _all_text(r) for kw in _CAPICOLA_SANDWICH_KEYWORDS)
+        ) >= 1,
+    ),
+    Achievement(
+        "hoppy_assimilation", "Хмельная ассимиляция",
+        "Трижды добавьте рецепт, где пиво используется для тушения или маринада.",
+        "🍺", "Пасхалки", is_hidden=True,
+        check=lambda c: c.own_count_where(lambda r: _any_keyword(_ingredient_names(r), ["пиво"])) >= 3,
+    ),
+    Achievement(
+        "lamb_to_slaughter", "Агнец на заклание",
+        "Добавьте первый рецепт из баранины на открытом огне или гриле.",
+        "🔥", "Пасхалки", is_hidden=True,
+        prerequisite_keys=("meat_baron",),
+        check=lambda c: c.own_count_where(
+            lambda r: _any_keyword(_ingredient_names(r), _LAMB_KEYWORDS) and _any_keyword([_all_text(r)], _GRILL_KEYWORDS)
+        ) >= 1,
+    ),
+    Achievement(
+        "thermal_paste_replacement", "Горячая замена термопасты",
+        "Добавьте 5 рецептов густых паштетов, рийетов или мясных намазок.",
+        "🫙", "Пасхалки", is_hidden=True,
+        check=lambda c: c.own_count_where(lambda r: _any_keyword([r.name.lower()], _PATE_KEYWORDS)) >= 5,
+    ),
+    Achievement(
+        "cloistered_silence", "Келейное безмолвие",
+        "Добавьте постный рецепт на 1 порцию из 3 ингредиентов или меньше.",
+        "🍵", "Пасхалки", is_hidden=True,
+        check=lambda c: c.own_count_where(
+            lambda r: r.base_portions == 1 and len(r.ingredient_links) <= 3
+            and not _any_keyword(_ingredient_names(r), _MEAT_KEYWORDS + _FISH_KEYWORDS)
+        ) >= 1,
+    ),
+    Achievement(
+        "remote_access", "Удалённый доступ",
+        "Добавьте или отредактируйте рецепт с десктопного клиента Telegram.",
+        "🖥", "Пасхалки", is_hidden=True,
+        check=lambda c: False,  # мгновенная, см. INSTANT_KEYS
     ),
 ]
 
@@ -497,12 +711,22 @@ async def check_and_unlock(session: AsyncSession, user_id: int) -> list[Achievem
     already = await get_unlocked_keys(session, user_id)
     context = await build_context(session, user_id)
 
+    # Копия, которую пополняем по ходу цикла - так ачивка с prerequisite_keys
+    # может открыться в том же самом вызове, что и её "предок" (если порядок
+    # в списке ACHIEVEMENTS выше - предок раньше потомка).
+    unlocked_so_far = set(already)
+
     newly_unlocked: list[Achievement] = []
     for achievement in ACHIEVEMENTS:
         if achievement.key in already or achievement.key in INSTANT_KEYS:
             continue
+        if achievement.prerequisite_keys and not all(
+            p in unlocked_so_far for p in achievement.prerequisite_keys
+        ):
+            continue
         if achievement.check(context):
             session.add(UserAchievement(user_id=user_id, achievement_key=achievement.key))
+            unlocked_so_far.add(achievement.key)
             newly_unlocked.append(achievement)
 
     if newly_unlocked:
