@@ -34,6 +34,7 @@ from backend.schemas import (
     CookIn,
     DietaryOptionOut,
     DietarySettingsIn,
+    DietarySettingsOut,
     FridgeMatch,
     FridgeMatchIn,
     GenerateRecipeIn,
@@ -52,7 +53,7 @@ from backend.ai_recipe import RecipeGenerationError, generate_recipe_dict
 from backend.achievements import check_and_unlock, get_unlocked_keys, unlock_instant, ACHIEVEMENTS, DESKTOP_PLATFORMS
 from backend.recipe_import import RecipeImportError, import_recipe_from_url, search_recipe_url
 from backend.utils import scale_amount
-from backend.dietary import DIETARY_OPTIONS, restriction_labels_for
+from backend.dietary import DIETARY_OPTIONS, MAX_CUSTOM_ALLERGENS, restriction_labels_for
 from backend.seasonal import current_season
 
 logger = logging.getLogger("chefbot.main")
@@ -109,21 +110,24 @@ def photo_url_for(recipe) -> str | None:
     return f"/photos/{recipe.photo_path}"
 
 
-def recipe_restriction_labels(recipe, dietary_keys: list[str]) -> list[str]:
+def recipe_restriction_labels(recipe, dietary_keys: list[str], custom_allergens: list[str] | None = None) -> list[str]:
     """
     dietary_keys - активные пищевые ограничения пользователя (User.dietary_restrictions).
+    custom_allergens - его же собственные, вписанные вручную продукты (User.custom_allergens).
     Требует, чтобы recipe.ingredient_links был заранее загружен (selectinload) -
     иначе в асинхронной сессии обращение к нему упадёт с ошибкой ленивой загрузки.
     """
-    if not dietary_keys:
+    if not dietary_keys and not custom_allergens:
         return []
     ingredient_names = [link.ingredient.name.lower() for link in recipe.ingredient_links]
     text = " ".join([recipe.name.lower()] + ingredient_names)
-    return restriction_labels_for(text, dietary_keys)
+    return restriction_labels_for(text, dietary_keys, custom_allergens)
 
 
-def recipe_to_short(recipe, favorite_ids: set[int], dietary_keys: list[str] | None = None) -> RecipeShort:
-    labels = recipe_restriction_labels(recipe, dietary_keys or [])
+def recipe_to_short(
+    recipe, favorite_ids: set[int], dietary_keys: list[str] | None = None, custom_allergens: list[str] | None = None
+) -> RecipeShort:
+    labels = recipe_restriction_labels(recipe, dietary_keys or [], custom_allergens or [])
     return RecipeShort(
         id=recipe.id,
         name=recipe.name,
@@ -166,19 +170,26 @@ async def api_home_seasonal(db: AsyncSession = Depends(get_db), user: TelegramUs
     recipes = await crud.get_seasonal_recipes(db, season["keywords"])
     return SeasonalShelf(
         title=season["title"],
-        recipes=[recipe_to_short(r, favorite_ids, db_user.dietary_restrictions) for r in recipes],
+        recipes=[recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens) for r in recipes],
     )
 
 
-@app.get("/api/settings/dietary", response_model=list[DietaryOptionOut])
+@app.get("/api/settings/dietary", response_model=DietarySettingsOut)
 async def api_get_dietary_settings(db: AsyncSession = Depends(get_db), user: TelegramUser = Depends(get_current_user)):
-    """Список всех доступных пищевых ограничений с отметкой, какие активны у пользователя."""
+    """
+    Список всех доступных пищевых ограничений с отметкой, какие активны у
+    пользователя, плюс его собственные, вписанные вручную продукты
+    (см. User.custom_allergens).
+    """
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     active = set(db_user.dietary_restrictions or [])
-    return [
-        DietaryOptionOut(key=key, label=opt["label"], active=key in active)
-        for key, opt in DIETARY_OPTIONS.items()
-    ]
+    return DietarySettingsOut(
+        options=[
+            DietaryOptionOut(key=key, label=opt["label"], active=key in active)
+            for key, opt in DIETARY_OPTIONS.items()
+        ],
+        custom=db_user.custom_allergens or [],
+    )
 
 
 @app.post("/api/settings/dietary")
@@ -187,12 +198,24 @@ async def api_save_dietary_settings(
     db: AsyncSession = Depends(get_db),
     user: TelegramUser = Depends(get_current_user),
 ):
-    """Сохраняет выбранные пищевые ограничения профиля (см. GET .../dietary)."""
+    """Сохраняет выбранные пищевые ограничения профиля, включая свои продукты (см. GET .../dietary)."""
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     valid_keys = [k for k in payload.keys if k in DIETARY_OPTIONS]
+    # Свои продукты - без дублей, в нижнем регистре, с разумным лимитом на
+    # количество (защита от случайной/злонамеренной простыни текста).
+    seen = set()
+    custom = []
+    for item in payload.custom:
+        cleaned = item.strip().lower()
+        if cleaned and cleaned not in seen:
+            seen.add(cleaned)
+            custom.append(cleaned)
+    custom = custom[:MAX_CUSTOM_ALLERGENS]
+
     db_user.dietary_restrictions = valid_keys
+    db_user.custom_allergens = custom
     await db.commit()
-    return {"ok": True, "keys": valid_keys}
+    return {"ok": True, "keys": valid_keys, "custom": custom}
 
 
 @app.get("/api/categories", response_model=list[CategoryOut])
@@ -214,7 +237,7 @@ async def api_category_recipes(
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     recipes = await crud.get_recipes_by_category(db, category_id)
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
-    return [recipe_to_short(r, favorite_ids, db_user.dietary_restrictions) for r in recipes]
+    return [recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens) for r in recipes]
 
 
 @app.get("/api/recipes/random", response_model=RecipeShort)
@@ -233,7 +256,7 @@ async def api_random_recipe(db: AsyncSession = Depends(get_db), user: TelegramUs
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
     recipe = await crud.get_recipe_full(db, random.choice(recipes).id)
-    return recipe_to_short(recipe, favorite_ids, db_user.dietary_restrictions)
+    return recipe_to_short(recipe, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens)
 
 
 @app.get("/api/recipes/{recipe_id}", response_model=RecipeDetail)
@@ -251,7 +274,7 @@ async def api_recipe_detail(
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
     customization = await crud.get_recipe_customization(db, db_user.id, recipe_id)
     step_notes = customization.step_notes if customization else {}
-    restricted_labels = recipe_restriction_labels(recipe, db_user.dietary_restrictions)
+    restricted_labels = recipe_restriction_labels(recipe, db_user.dietary_restrictions, db_user.custom_allergens)
 
     target_portions = portions or recipe.base_portions
     ingredients = [
@@ -390,7 +413,7 @@ async def api_search(
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
     recipes = await crud.search_recipes(db, q)
-    return [recipe_to_short(r, favorite_ids, db_user.dietary_restrictions) for r in recipes]
+    return [recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens) for r in recipes]
 
 
 @app.post("/api/recipes/generate", response_model=RecipeShort)
@@ -410,7 +433,7 @@ async def api_generate_recipe(
     # (ловит и точные совпадения, и вариации вида "Рыба фугу" / "Рыба фугу в соевом соусе")
     similar = await crud.find_similar_active_recipe(db, dish_name)
     if similar is not None:
-        return recipe_to_short(similar, favorite_ids, db_user.dietary_restrictions)
+        return recipe_to_short(similar, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens)
 
     data: dict | None = None
     source_url: str | None = None
@@ -442,7 +465,7 @@ async def api_generate_recipe(
         await unlock_instant(db, db_user.id, "remote_access")
     await check_and_unlock(db, db_user.id)
     recipe_full = await crud.get_recipe_full(db, recipe.id)
-    return recipe_to_short(recipe_full, favorite_ids, db_user.dietary_restrictions)
+    return recipe_to_short(recipe_full, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens)
 
 
 # ---------------------------------------------------------------------------
@@ -480,7 +503,7 @@ async def api_fridge_match(
 
     return [
         FridgeMatch(
-            recipe=recipe_to_short(recipe, favorite_ids, db_user.dietary_restrictions),
+            recipe=recipe_to_short(recipe, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens),
             matched=matched,
             total=total,
             percent=round(matched / total * 100),
@@ -499,7 +522,7 @@ async def api_favorites(db: AsyncSession = Depends(get_db), user: TelegramUser =
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     recipes = await crud.get_favorites(db, db_user.id)
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
-    return [recipe_to_short(r, favorite_ids, db_user.dietary_restrictions) for r in recipes]
+    return [recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens) for r in recipes]
 
 
 _SEAFOOD_KEYWORDS = ["рыба", "лосось", "треска", "судак", "сельдь", "форель", "тунец", "скумбри", "кальмар", "креветк", "морепродукт", "мидии", "краб", "осьминог"]
