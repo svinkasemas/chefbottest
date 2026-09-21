@@ -656,11 +656,25 @@ async def api_clear_checked(db: AsyncSession = Depends(get_db), user: TelegramUs
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     member_ids = await crud.get_shopping_member_ids(db, db_user.id)
     await crud.clear_checked_shopping_items(db, member_ids)
+
+    # Если общий список опустел полностью (ничего не осталось даже
+    # неотмеченного) - распускаем группу: иначе один и тот же код
+    # приглашения жил бы бесконечно, и все, кого когда-либо приглашали
+    # (сначала жену, потом друзей...), навсегда видели бы списки друг друга.
+    # Следующее "Поделиться списком" создаст новую группу "с чистого листа".
+    group_disbanded = False
+    if db_user.shopping_group_id is not None:
+        remaining = await crud.get_shopping_list(db, member_ids)
+        if not remaining:
+            await crud.disband_shopping_group(db, db_user.shopping_group_id)
+            group_disbanded = True
+
     # Стоит проверить после очистки - список покупок мог "сойтись" ровно к
     # двум оставшимся позициям (см., например, ачивку "Кто убил Лору Палмер?").
     newly_unlocked = await check_and_unlock(db, db_user.id)
     return {
         "ok": True,
+        "group_disbanded": group_disbanded,
         "new_achievements": [
             {"key": a.key, "title": a.title, "description": a.description, "emoji": a.emoji}
             for a in newly_unlocked
