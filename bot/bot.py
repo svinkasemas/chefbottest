@@ -58,7 +58,7 @@ WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
 # клиент) агрессивно кэширует саму страницу Mini App по её URL; изменение
 # URL - самый надёжный способ заставить его загрузить свежую версию, не
 # полагаясь на HTTP-кэш и не прося пользователей вручную чистить кэш.
-WEBAPP_VERSION = "11"
+WEBAPP_VERSION = "12"
 
 
 def _webapp_url() -> str:
@@ -116,45 +116,92 @@ async def cmd_start(message: Message):
 
 
 # ---------------------------------------------------------------------------
-# Общий список покупок (Co-op режим): switch_inline_query из Mini App
+# Inline-режим: @bot_username <запрос> в любом чате
 # ---------------------------------------------------------------------------
 
-@dp.inline_query()
-async def inline_share_shopping_list(inline_query: InlineQuery):
-    """
-    Обрабатывает inline-запрос, который открывается кнопкой "Поделиться
-    списком" на экране покупок в Mini App через tg.switchInlineQuery(...)
-    (см. webapp/app.js). Пользователь выбирает чат (с партнёром/семьёй),
-    и туда уходит сообщение со ссылкой на общий список покупок - тот, кто
-    его откроет, присоединится к той же ShoppingGroup, см.
-    POST /api/shopping-list/join в backend/main.py.
+def _photo_thumb_url(photo_path: str | None) -> str | None:
+    if not photo_path:
+        return None
+    if photo_path.startswith("http"):
+        return photo_path
+    if not WEBAPP_URL:
+        return None
+    base = WEBAPP_URL if WEBAPP_URL.endswith("/") else WEBAPP_URL + "/"
+    return f"{base}photos/{photo_path}"
 
-    Текст запроса всегда имеет вид "join_<код>" - его формирует фронтенд
-    из кода приглашения, полученного через POST /api/shopping-list/share.
+
+@dp.inline_query()
+async def handle_inline_query(inline_query: InlineQuery):
+    """
+    Обрабатывает inline-запросы @bot_username <текст> в любом чате - два вида:
+
+    1) "join_<код>" - служебный запрос от кнопки "Поделиться списком" на
+       экране покупок в Mini App через tg.switchInlineQuery(...) (см.
+       webapp/app.js). Пользователь выбирает чат (с партнёром/семьёй), и туда
+       уходит ссылка на общий список покупок - тот, кто её откроет,
+       присоединится к той же ShoppingGroup, см. POST /api/shopping-list/join
+       в backend/main.py.
+
+    2) Любой другой текст - обычный inline-поиск по названию блюда: можно
+       прямо в семейном чате набрать "@bot_username зити" и отправить туда
+       красивую карточку рецепта с кнопкой "Открыть рецепт" (диплинк вида
+       t.me/BOT?startapp=recipe_42, см. deepLinkMatch в webapp/app.js).
     """
     query_text = (inline_query.query or "").strip()
-    match = re.match(r"^join_([A-Za-z0-9]+)$", query_text)
-    if not match or not BOT_USERNAME:
-        await inline_query.answer([], cache_time=1, is_personal=True)
+
+    join_match = re.match(r"^join_([A-Za-z0-9]+)$", query_text)
+    if join_match:
+        if not BOT_USERNAME:
+            await inline_query.answer([], cache_time=1, is_personal=True)
+            return
+        code = join_match.group(1)
+        deep_link = f"https://t.me/{BOT_USERNAME}?startapp=join_{code}"
+        result = InlineQueryResultArticle(
+            id=f"shopping_{code}",
+            title="🛒 Общий список покупок",
+            description="Нажмите, чтобы присоединиться и готовить покупки вместе",
+            input_message_content=InputTextMessageContent(
+                message_text=(
+                    "🛒 <b>Приглашение в общий список покупок ChefBot</b>\n"
+                    "Открой список — отметки в нём видны всем участникам в реальном времени."
+                ),
+            ),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[[InlineKeyboardButton(text="🛒 Открыть общий список", url=deep_link)]]
+            ),
+        )
+        await inline_query.answer([result], cache_time=1, is_personal=True)
         return
 
-    code = match.group(1)
-    deep_link = f"https://t.me/{BOT_USERNAME}?startapp=join_{code}"
-    result = InlineQueryResultArticle(
-        id=f"shopping_{code}",
-        title="🛒 Общий список покупок",
-        description="Нажмите, чтобы присоединиться и готовить покупки вместе",
-        input_message_content=InputTextMessageContent(
-            message_text=(
-                "🛒 <b>Приглашение в общий список покупок ChefBot</b>\n"
-                "Открой список — отметки в нём видны всем участникам в реальном времени."
-            ),
-        ),
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="🛒 Открыть общий список", url=deep_link)]]
-        ),
-    )
-    await inline_query.answer([result], cache_time=1, is_personal=True)
+    if not BOT_USERNAME or not query_text:
+        await inline_query.answer(
+            [], cache_time=1, is_personal=True,
+            switch_pm_text="Введите название блюда для поиска…", switch_pm_parameter="inline_hint",
+        )
+        return
+
+    async with async_session() as session:
+        recipes = await crud.search_recipes(session, query_text, limit=15)
+
+    results = []
+    for r in recipes:
+        deep_link = f"https://t.me/{BOT_USERNAME}?startapp=recipe_{r.id}"
+        emoji = r.category.emoji if r.category else "🍽"
+        results.append(
+            InlineQueryResultArticle(
+                id=f"recipe_{r.id}",
+                title=f"{emoji} {r.name}",
+                description=f"⏱ {r.time_minutes} мин · сложность {r.difficulty}/5",
+                thumbnail_url=_photo_thumb_url(r.photo_path),
+                input_message_content=InputTextMessageContent(
+                    message_text=f"{emoji} <b>{html.escape(r.name)}</b>\nРецепт из ChefBot — жмите «Открыть рецепт».",
+                ),
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[[InlineKeyboardButton(text="🍽 Открыть рецепт", url=deep_link)]]
+                ),
+            )
+        )
+    await inline_query.answer(results, cache_time=30, is_personal=True)
 
 
 # ---------------------------------------------------------------------------
