@@ -505,6 +505,28 @@ async def leave_shopping_group(session: AsyncSession, user_id: int) -> None:
         await session.commit()
 
 
+async def disband_shopping_group(session: AsyncSession, group_id: int) -> None:
+    """
+    Распускает общую группу целиком: у всех участников сбрасывается
+    shopping_group_id (каждый возвращается к своему личному списку) и сама
+    ShoppingGroup удаляется вместе со старым кодом приглашения.
+
+    Вызывается автоматически, когда общий список покупок пустеет полностью
+    (см. POST /api/shopping-list/clear-checked) - иначе один и тот же код
+    приглашения жил бы бесконечно, и все, кого когда-либо приглашали (жену,
+    потом друзей...), навсегда оставались бы в одном списке друг с другом.
+    После роспуска следующее "Поделиться списком" создаёт новую группу с
+    новым кодом - естественное разделение между разными "сессиями" покупок.
+    """
+    result = await session.execute(select(User).where(User.shopping_group_id == group_id))
+    for member in result.scalars().all():
+        member.shopping_group_id = None
+    group = await session.get(ShoppingGroup, group_id)
+    if group is not None:
+        await session.delete(group)
+    await session.commit()
+
+
 async def get_shopping_list(session: AsyncSession, member_ids: set[int]) -> list[tuple[ShoppingListItem, User | None]]:
     """Список покупок всех участников группы вместе с тем, кто каждый товар добавил."""
     result = await session.execute(
