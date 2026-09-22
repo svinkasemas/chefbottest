@@ -43,6 +43,14 @@ NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY", "").strip() or None
 # но с более жёстким лимитом ("keyless"-доступ).
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip() or None
 
+# Поиск настоящих фотографий блюд в свободных источниках для рецептов без
+# фото (backend/photo_search.py, scripts/generate_recipe_images.py) - замена
+# ИИ-рисованных картинок через Pollinations. Бесплатно, без карты:
+# https://www.pexels.com/api - без ключа поиск всё равно работает через
+# Openverse (агрегатор изображений с открытыми лицензиями, ключ не нужен),
+# но с ключом Pexels результаты обычно качественнее и разнообразнее.
+PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip() or None
+
 # Разрешить работу без проверки подписи Telegram (ТОЛЬКО для локальной разработки
 # в браузере, где нет initData). На проде должно быть False.
 DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
