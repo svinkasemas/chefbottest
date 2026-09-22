@@ -487,7 +487,7 @@ async def try_add_recipe_json(message: Message):
             photo_path=data.get("photo_path"),
             time_minutes=data.get("time_minutes", 30),
             difficulty=data.get("difficulty", 2),
-            calories=data.get("calories", 0),
+            calories=round(data.get("calories") or 0),
             price_level=data.get("price_level", "Недорого"),
             cuisine=data.get("cuisine", "Русская"),
             base_portions=data.get("base_portions", 4),
