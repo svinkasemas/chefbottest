@@ -15,6 +15,11 @@
 Оба источника отдают лицензионно свободные фотографии (можно использовать
 без риска нарушить авторские права), в отличие от прямого скрейпинга
 случайных сайтов с рецептами.
+
+Перед поиском название блюда переводится на английский (см.
+_translate_query_for_search) - Pexels/Openverse проиндексированы в основном
+по англоязычным подписям, и поиск по русскому названию часто вообще не
+находил совпадений и подставлял случайное/повторяющееся фото не по теме.
 """
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ import logging
 
 import requests
 
+from backend.ai_recipe import _call_with_fallback
 from backend.config import PEXELS_API_KEY, PROXY_URL
 
 logger = logging.getLogger(__name__)
@@ -79,6 +85,35 @@ def _search_openverse(query: str) -> str | None:
     return None
 
 
+def _translate_query_for_search(dish_name: str, cuisine: str | None) -> str:
+    """
+    Переводит название блюда (и кухню, если есть) на английский перед
+    поиском в Pexels/Openverse. Оба сервиса проиндексированы в основном по
+    англоязычным подписям к фото - поиск по русскому названию часто не
+    находит ничего релевантного и в итоге подставляет случайное/повторяющееся
+    фото не по теме. Если перевод не удался (все ИИ-провайдеры недоступны) -
+    используем название как есть (хуже релевантность, но поиск не падает).
+    """
+    cuisine_part = f", кухня «{cuisine}»" if cuisine else ""
+    prompt = (
+        f'Название блюда: «{dish_name}»{cuisine_part}.\n\n'
+        f"Переведи название на английский язык и опиши блюдо коротким запросом "
+        f"для поиска ФОТОГРАФИИ этого конкретного блюда в стоковом фотобанке "
+        f"(Pexels/Openverse) - 3-6 английских слов, по которым с высокой "
+        f"вероятностью найдётся именно фото этого блюда, а не общая картинка "
+        f'еды. Ответь СТРОГО одним JSON-объектом без markdown-разметки: '
+        f'{{"query": "english search phrase"}}'
+    )
+    try:
+        data = _call_with_fallback(prompt, error_subject=f"перевод названия «{dish_name}» для поиска фото")
+        query = str(data.get("query", "")).strip()
+        if query:
+            return query
+    except Exception as e:
+        logger.warning("Не удалось перевести «%s» для поиска фото, ищу как есть: %s", dish_name, e)
+    return f"{dish_name} {cuisine} food" if cuisine else f"{dish_name} food"
+
+
 def search_dish_photo(dish_name: str, cuisine: str | None = None) -> str | None:
     """
     Ищет фотографию блюда в свободных источниках (см. docstring модуля).
@@ -86,7 +121,7 @@ def search_dish_photo(dish_name: str, cuisine: str | None = None) -> str | None:
     нашлось ни в одном источнике - тогда рецепт остаётся без фото до
     следующего запуска scripts/generate_recipe_images.py.
     """
-    query = f"{dish_name} dish food" if not cuisine else f"{dish_name} {cuisine} food"
+    query = _translate_query_for_search(dish_name, cuisine)
     for search_fn in (_search_pexels, _search_openverse):
         url = search_fn(query)
         if url:
