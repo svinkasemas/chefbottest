@@ -23,7 +23,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import TelegramUser, get_current_user
-from backend.config import BOT_USERNAME, CORS_ORIGINS, WEBAPP_DIR
+from backend.config import BOT_USERNAME, CORS_ORIGINS, PHOTOS_DIR, WEBAPP_DIR
 from backend.database import crud
 from backend.database.db import get_db, init_db
 from backend.database.models import Category
@@ -107,7 +107,17 @@ def photo_url_for(recipe) -> str | None:
         return None
     if recipe.photo_path.startswith("http"):
         return recipe.photo_path
-    return f"/photos/{recipe.photo_path}"
+    # ?v=<mtime файла> - сброс кэша браузера/Telegram WebView. Имя файла
+    # (recipe_<id>.jpg) не меняется, когда фото переподбирается заново (см.
+    # scripts/generate_recipe_images.py), поэтому без версии клиент может
+    # продолжать показывать старую закэшированную картинку по тому же URL
+    # даже после того, как на сервере файл уже заменён.
+    version = ""
+    try:
+        version = f"?v={int((PHOTOS_DIR / recipe.photo_path).stat().st_mtime)}"
+    except OSError:
+        pass
+    return f"/photos/{recipe.photo_path}{version}"
 
 
 def recipe_restriction_labels(recipe, dietary_keys: list[str], custom_allergens: list[str] | None = None) -> list[str]:
