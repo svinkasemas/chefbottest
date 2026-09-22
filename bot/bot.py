@@ -560,7 +560,7 @@ async def try_add_recipe_from_url(message: Message):
         )
         return
 
-    photo_note = "фото появится при следующей ночной генерации (04:00)"
+    photo_note = "фото появится при следующем ежедневном подборе фото"
     if image_url:
         try:
             image_bytes = await asyncio.to_thread(download_image_bytes, image_url)
@@ -569,6 +569,10 @@ async def try_add_recipe_from_url(message: Message):
             async with async_session() as session:
                 db_recipe = await session.get(Recipe, recipe.id)
                 db_recipe.photo_path = filename
+                # "source_page" - настоящее фото с исходного сайта, а не
+                # подобранное автоматически - scripts/generate_recipe_images.py
+                # с флагом --replace-all такие фото не трогает.
+                db_recipe.photo_source = "source_page"
                 await session.commit()
             photo_note = "фото взято с исходной страницы"
         except Exception as e:
