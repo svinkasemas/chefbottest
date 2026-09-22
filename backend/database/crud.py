@@ -188,7 +188,10 @@ async def create_recipe_from_ai_data(
         photo_prompt=data.get("photo_prompt"),
         time_minutes=data.get("time_minutes", 30),
         difficulty=data.get("difficulty", 2),
-        calories=data.get("calories", 0),
+        # round() - ИИ (генерация/парсинг импортированной страницы) иногда
+        # возвращает калорийность дробным числом (например 122.3), а схема
+        # ответа API (RecipeShort.calories) требует целое - см. main.py.
+        calories=round(data.get("calories") or 0),
         price_level=data.get("price_level", "Недорого"),
         cuisine=data.get("cuisine", "Русская"),
         base_portions=data.get("base_portions", 4),
