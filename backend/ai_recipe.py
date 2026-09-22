@@ -265,6 +265,41 @@ def verify_recipe_dict(name: str, cuisine: str, description: str) -> dict:
     return _call_with_fallback(prompt, error_subject=f"проверка «{name}»")
 
 
+def build_suggest_prompt(category_counts: dict[str, int], recent_names: list[str], count: int) -> str:
+    counts_text = ", ".join(f"{name}: {n}" for name, n in category_counts.items()) or "данных нет"
+    recent_text = ", ".join(recent_names) if recent_names else "пока ничего"
+    return (
+        f"Ты помогаешь пополнять базу рецептов кулинарного приложения новыми блюдами.\n\n"
+        f"Текущее количество рецептов по категориям: {counts_text}.\n"
+        f"Уже недавно добавленные блюда (не предлагай их снова): {recent_text}.\n\n"
+        f"Предложи {count} названий РЕАЛЬНЫХ, конкретных блюд (не общих категорий вроде "
+        f"«суп» или «салат», а именно конкретное блюдо со своим названием), которых "
+        f"точно нет в списке недавно добавленных выше. Отдавай предпочтение категориям "
+        f"с меньшим количеством рецептов. Бери разнообразные кухни мира и разные "
+        f"уровни сложности — от простых повседневных блюд до праздничных.\n\n"
+        f'Ответь СТРОГО одним JSON-объектом без markdown-разметки: '
+        f'{{"dishes": ["Название блюда 1", "Название блюда 2", ...]}}'
+    )
+
+
+def suggest_new_dish_names(category_counts: dict[str, int], recent_names: list[str], count: int) -> list[str]:
+    """
+    Просит ИИ предложить count новых названий блюд для ежедневного пополнения
+    базы (см. scripts/daily_recipe_collector.py). Это только "подсказка",
+    ориентир для ИИ, а не гарантия уникальности - настоящая защита от
+    дублей происходит при самом добавлении рецепта, в
+    crud.create_recipe_from_ai_data (см. find_similar_active_recipe), так
+    что даже если ИИ случайно предложит что-то очень похожее на уже
+    существующее блюдо, новая запись не появится - вернётся существующая.
+    """
+    prompt = build_suggest_prompt(category_counts, recent_names, count)
+    data = _call_with_fallback(prompt, error_subject="подбор новых блюд")
+    dishes = data.get("dishes", [])
+    if not isinstance(dishes, list):
+        raise RecipeGenerationError("ИИ вернул некорректный формат списка блюд")
+    return [str(d).strip() for d in dishes if str(d).strip()][:count]
+
+
 def _call_with_fallback(prompt: str, error_subject: str) -> dict:
     """
     Пробует по очереди: Gemini напрямую, Gemini через прокси,
