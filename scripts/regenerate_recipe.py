@@ -5,8 +5,9 @@
 Сохраняет id рецепта (а с ним - избранное пользователей), но полностью
 заменяет кухню, описание, ингредиенты, шаги и photo_prompt на то, что вернёт
 ИИ по актуальному, исправленному промпту. Старое фото удаляется (photo_path
-сбрасывается в NULL) - следующий запуск scripts/generate_recipe_images
-сгенерирует новое, соответствующее исправленному описанию.
+и photo_source сбрасываются в NULL) - следующий запуск
+scripts/generate_recipe_images подберёт новое фото из свободных источников
+по исправленному названию/составу.
 
 Запуск (из корня проекта, с активированным venv):
     python -m scripts.regenerate_recipe --id 76
@@ -59,6 +60,7 @@ async def regenerate(recipe_id: int, dish_name: str | None) -> None:
             if old_photo.exists():
                 old_photo.unlink()
             recipe.photo_path = None
+            recipe.photo_source = None
 
         recipe.name = data.get("name", name_to_generate)
         recipe.photo_prompt = data.get("photo_prompt")
