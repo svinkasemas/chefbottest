@@ -192,6 +192,16 @@ class AchievementContext:
     max_same_recipe_streak: int = 0
     max_morning_recipe_streak: int = 0
 
+    # --- добавлено в четвёртой партии ачивок --------------------------------
+    # Настроил хотя бы одно ограничение/аллерген в профиле (см. backend/dietary.py).
+    dietary_configured: bool = False
+    # Состоит в общем списке покупок (Co-op режим, см. ShoppingGroup) - не
+    # обязательно сам его создал, важно что список сейчас общий с кем-то ещё.
+    in_shared_shopping_group: bool = False
+    # Сколько РАЗНЫХ рецептов (не только своих) снабжены личной заметкой
+    # (RecipeCustomization.personal_note) - см. POST /api/recipes/{id}/note.
+    personal_notes_count: int = 0
+
     def __post_init__(self) -> None:
         self.own_recipes_count = len(self.own_recipes)
         self.distinct_recipe_ids = {r.id for _, r in self.events}
@@ -240,6 +250,15 @@ def _longest_streak(sorted_days: list[date]) -> int:
         elif gap > 1:
             current = 1
     return best
+
+
+def _has_gap_of_at_least(sorted_days: list[date], min_gap_days: int) -> bool:
+    """Есть ли между какими-то двумя ПОСЛЕДОВАТЕЛЬНЫМИ днями готовки перерыв
+    от min_gap_days и больше (пользователь вернулся после долгого перерыва)."""
+    return any(
+        (sorted_days[i] - sorted_days[i - 1]).days >= min_gap_days
+        for i in range(1, len(sorted_days))
+    )
 
 
 def _shopping_is_exactly(items: list[ShoppingListItem], keywords_a: list[str], keywords_b: list[str]) -> bool:
@@ -1001,6 +1020,119 @@ ACHIEVEMENTS: list[Achievement] = [
         "🥫", "Пасхалки", is_hidden=True,
         check=lambda c: False,
     ),
+
+    # === Четвёртая партия ачивок ============================================
+
+    # --- Прогрессия (продвинутая) -------------------------------------------
+    Achievement(
+        "century_club", "Клуб сотни",
+        "Приготовьте блюда 100 раз — неважно, разные или повторно.",
+        "🥇", "Прогрессия",
+        check=lambda c: len(c.events) >= 100,
+    ),
+    Achievement(
+        "night_owl", "Ночная сова",
+        "Приготовьте блюдо глубокой ночью — между полуночью и 4 утра.",
+        "🦉", "Прогрессия",
+        check=lambda c: any(log.cooked_at.hour < 4 for log, _ in c.events),
+    ),
+    Achievement(
+        "busy_day", "День шеф-повара",
+        "Приготовьте 3 разных блюда за один день.",
+        "👨‍🍳", "Прогрессия",
+        check=lambda c: max(Counter(log.cooked_at.date() for log, _ in c.events).values(), default=0) >= 3,
+    ),
+    Achievement(
+        "comeback_kid", "Возвращение блудного повара",
+        "Вернитесь готовить после перерыва в 60 и более дней.",
+        "🔄", "Прогрессия",
+        check=lambda c: _has_gap_of_at_least(sorted(c.cook_dates), 60),
+    ),
+    Achievement(
+        "legend_of_the_kitchen", "Легенда кухни",
+        "Приготовьте 100 действительно разных блюд.",
+        "👑", "Прогрессия",
+        prerequisite_keys=("hero_of_ladle",),
+        check=lambda c: len(c.distinct_recipe_ids) >= 100,
+    ),
+
+    # --- Кухни мира ----------------------------------------------------------
+    Achievement(
+        "globe_trotter", "Кругосветное путешествие",
+        "Приготовьте блюда 8 разных кухонь мира.",
+        "🌍", "Кухни мира",
+        check=lambda c: len({r.cuisine.lower() for _, r in c.events if r.cuisine}) >= 8,
+    ),
+    Achievement(
+        "loyal_palate", "Верность вкусу",
+        "Приготовьте 20 блюд одной и той же кухни.",
+        "🎌", "Кухни мира",
+        check=lambda c: max(
+            Counter(r.cuisine.lower() for _, r in c.events if r.cuisine).values(), default=0
+        ) >= 20,
+    ),
+
+    # --- Питание (новая категория) -------------------------------------------
+    Achievement(
+        "light_eater", "Лёгкость на кухне",
+        "Приготовьте 15 блюд калорийностью не более 300 ккал.",
+        "🥗", "Питание",
+        check=lambda c: c.count_where(lambda r: r.calories and 0 < r.calories <= 300) >= 15,
+    ),
+    Achievement(
+        "budget_chef", "Экономный кулинар",
+        "Приготовьте 20 блюд ценового уровня «Эконом» или «Недорого».",
+        "💰", "Питание",
+        check=lambda c: c.count_where(lambda r: r.price_level in ("Эконом", "Недорого")) >= 20,
+    ),
+    Achievement(
+        "gourmet_night", "Праздник к нам приходит",
+        "Приготовьте 5 блюд праздничного ценового уровня.",
+        "🥂", "Питание",
+        check=lambda c: c.count_where(lambda r: r.price_level == "Праздничный") >= 5,
+    ),
+
+    # --- Прогрессия базы и качество данных (продолжения) ---------------------
+    Achievement(
+        "network_scout_pro", "Мастер поиска рецептов",
+        "Добавьте 25 рецептов с помощью импорта по ссылке с других сайтов.",
+        "🌐", "Технические",
+        prerequisite_keys=("network_scout",),
+        check=lambda c: c.own_count_where(lambda r: bool(r.source_url)) >= 25,
+    ),
+    Achievement(
+        "photogenic_chef", "Фотогеничный шеф",
+        "Добавьте 20 собственных рецептов с фотографией готового блюда.",
+        "📸", "Качество данных",
+        check=lambda c: c.own_count_where(lambda r: bool(r.photo_path)) >= 20,
+    ),
+    Achievement(
+        "master_stockpiler", "Верховный завхоз",
+        "Отметьте как «купленные» 500 товаров в списке покупок.",
+        "📦", "Исследование",
+        prerequisite_keys=("stockpiler",),
+        check=lambda c: c.shopping_checked_total >= 500,
+    ),
+
+    # --- Нишевые (новые фичи: диета, заметки, общий список) ------------------
+    Achievement(
+        "mindful_eater", "Осознанный подход",
+        "Настройте хотя бы одно пищевое ограничение или аллерген в профиле.",
+        "🥜", "Нишевые",
+        check=lambda c: c.dietary_configured,
+    ),
+    Achievement(
+        "team_player", "Командный игрок",
+        "Ведите общий список покупок вместе с кем-то ещё.",
+        "🤝", "Нишевые",
+        check=lambda c: c.in_shared_shopping_group,
+    ),
+    Achievement(
+        "storyteller", "Летописец кухни",
+        "Оставьте личные заметки к 10 разным рецептам.",
+        "📝", "Нишевые",
+        check=lambda c: c.personal_notes_count >= 10,
+    ),
 ]
 
 _BY_KEY = {a.key: a for a in ACHIEVEMENTS}
@@ -1075,6 +1207,19 @@ async def build_context(session: AsyncSession, user_id: int) -> AchievementConte
 
     account_age_days = (datetime.utcnow() - user.created_at).days if user and user.created_at else 0
 
+    dietary_configured = bool(user and (user.dietary_restrictions or user.custom_allergens))
+    in_shared_shopping_group = bool(user and user.shopping_group_id is not None)
+
+    personal_notes_count = (
+        await session.execute(
+            select(func.count(RecipeCustomization.id)).where(
+                RecipeCustomization.user_id == user_id,
+                RecipeCustomization.personal_note.is_not(None),
+                RecipeCustomization.personal_note != "",
+            )
+        )
+    ).scalar_one()
+
     return AchievementContext(
         events=events,
         favorites_count=len(favorites_count),
@@ -1087,6 +1232,9 @@ async def build_context(session: AsyncSession, user_id: int) -> AchievementConte
         shopping_items=shopping_items,
         account_age_days=account_age_days,
         shares_initiated_total=user.shares_initiated_total if user else 0,
+        dietary_configured=dietary_configured,
+        in_shared_shopping_group=in_shared_shopping_group,
+        personal_notes_count=personal_notes_count,
     )
 
 
