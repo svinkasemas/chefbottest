@@ -69,6 +69,13 @@ class Recipe(Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     photo_path: Mapped[str | None] = mapped_column(String(300), nullable=True)
     photo_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Откуда взято фото - "web_search" (настоящая фотография из свободного
+    # источника, см. scripts/generate_recipe_images.py), "source_page"
+    # (og:image со страницы-источника при ручном импорте через /import в
+    # bot.py) или NULL (старое фото, ещё не обработанное новым скриптом -
+    # либо не задано вовсе). "source_page" никогда не перезаписывается
+    # автоматическим подбором (--replace-all его пропускает).
+    photo_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
     is_ai_generated: Mapped[bool] = mapped_column(Boolean, default=False)
     # Ссылка на исходный сайт, если рецепт был импортирован по URL
     # (см. backend/recipe_import.py) - для указания авторства/источника.
