@@ -1,21 +1,30 @@
 """
 Ежедневный сбор новых рецептов без дублей.
 
+ВАЖНО: рецепт "с нуля" через ИИ НЕ придумывается - добавляются только
+реально найденные по ссылке рецепты (см. пункт 3 ниже). ИИ используется
+только для того, чтобы подсказать, КАКИЕ названия блюд поискать - не для
+сочинения состава и шагов приготовления.
+
 Раз в день (см. настройку автозапуска ниже) скрипт:
 1. Смотрит, сколько рецептов уже в каждой категории и что было добавлено
    в последние запуски - чтобы не заваливать одну категорию и не повторяться.
-2. Просит ИИ предложить несколько новых названий блюд (backend/ai_recipe.py,
-   suggest_new_dish_names) - это только ориентир, а не гарантия уникальности.
-3. Для каждого предложенного названия использует тот же пайплайн, что и
-   "Не нашли блюдо?" в мини-приложении (backend/main.py, api_generate_recipe):
-   сначала пробует найти и импортировать настоящий рецепт по ссылке
-   (search_recipe_url + import_recipe_from_url), и только если не
-   получилось - генерирует рецепт "с нуля" через ИИ.
+2. Просит ИИ предложить названия блюд-кандидатов (backend/ai_recipe.py,
+   suggest_new_dish_names) - с запасом (больше, чем --count), так как не
+   для каждого названия в интернете найдётся страница с настоящим рецептом.
+3. Для каждого кандидата ищет страницу с реальным рецептом и импортирует
+   именно её (search_recipe_url + import_recipe_from_url - тот же пайплайн,
+   что и "Не нашли блюдо?" в мини-приложении, backend/main.py,
+   api_generate_recipe, только БЕЗ его запасного пути с ИИ-генерацией).
+   Если подходящей страницы не нашлось или её не удалось разобрать -
+   кандидат просто пропускается, ничего не выдумывается.
 4. Настоящая защита от дублей - в crud.create_recipe_from_ai_data
    (find_similar_active_recipe по названию): если похожий рецепт уже есть,
    новая запись не создаётся, возвращается существующая, и такой кандидат
    учитывается как "пропущен", а не "добавлен".
-5. В конце присылает админам (ADMIN_IDS из .env) короткую сводку в Telegram.
+5. Останавливается, как только набрано --count добавленных рецептов (или
+   когда кандидаты закончились), и присылает админам (ADMIN_IDS из .env)
+   короткую сводку в Telegram.
 
 Запуск вручную (из корня проекта RecipeApp/, с активным venv):
     python -m scripts.daily_recipe_collector [--count N]
@@ -63,7 +72,7 @@ import logging
 
 from sqlalchemy import func, select
 
-from backend.ai_recipe import RecipeGenerationError, generate_recipe_dict, suggest_new_dish_names
+from backend.ai_recipe import RecipeGenerationError, suggest_new_dish_names
 from backend.config import ADMIN_IDS, BOT_TOKEN, PROXY_URL
 from backend.database import crud
 from backend.database.db import async_session, init_db
@@ -78,6 +87,11 @@ DEFAULT_COUNT = 5
 # снова" - без этого соседние запуски (сегодня/завтра) чаще предлагали бы
 # одно и то же, пока крупные категории не заполнятся.
 RECENT_NAMES_LIMIT = 40
+# Во сколько раз запрашивать у ИИ больше названий-кандидатов, чем нужно
+# реально добавить: раз рецепт "с нуля" не выдумываем, для многих названий
+# в интернете просто не найдётся страницы с рецептом - нужен запас.
+CANDIDATE_POOL_MULTIPLIER = 4
+MAX_CANDIDATES = 40
 
 
 async def _existing_ids(session) -> set[int]:
@@ -102,26 +116,24 @@ async def _category_counts(session) -> dict[str, int]:
     return {name: count for name, count in result.all()}
 
 
-async def _add_one(session, dish_name: str) -> tuple[Recipe, bool]:
+async def _add_one(session, dish_name: str) -> Recipe | None:
     """
-    Пробует добавить одно блюдо. Возвращает (рецепт, найден_ли_реальный_источник).
+    Пробует найти НАСТОЯЩИЙ рецепт этого блюда по ссылке и добавить именно
+    его. Ничего не выдумывает: если подходящей страницы не нашлось или её
+    не удалось разобрать - возвращает None, кандидат просто пропускается.
     Дедупликация - внутри crud.create_recipe_from_ai_data, см. docstring модуля.
     """
-    data = None
-    source_url = None
     found_url = await asyncio.to_thread(search_recipe_url, dish_name)
-    if found_url:
-        try:
-            data, _ = await asyncio.to_thread(import_recipe_from_url, found_url)
-            source_url = found_url
-        except RecipeImportError as e:
-            logger.warning("Импорт «%s» с %s не удался, пробую сгенерировать: %s", dish_name, found_url, e)
+    if not found_url:
+        return None
 
-    if data is None:
-        data = await asyncio.to_thread(generate_recipe_dict, dish_name)
+    try:
+        data, _ = await asyncio.to_thread(import_recipe_from_url, found_url)
+    except RecipeImportError as e:
+        logger.warning("Импорт «%s» с %s не удался: %s", dish_name, found_url, e)
+        return None
 
-    recipe = await crud.create_recipe_from_ai_data(session, data, source_url=source_url)
-    return recipe, source_url is not None
+    return await crud.create_recipe_from_ai_data(session, data, source_url=found_url)
 
 
 async def collect(count: int) -> dict:
@@ -134,40 +146,45 @@ async def collect(count: int) -> dict:
 
     logger.info("В базе сейчас %d активных рецептов по категориям: %s", len(seen_ids), category_counts)
 
+    pool_size = min(count * CANDIDATE_POOL_MULTIPLIER, MAX_CANDIDATES)
     try:
-        candidates = suggest_new_dish_names(category_counts, recent_names, count)
+        candidates = suggest_new_dish_names(category_counts, recent_names, pool_size)
     except RecipeGenerationError as e:
         logger.error("Не удалось получить предложения от ИИ: %s", e)
-        return {"added": [], "skipped": [], "failed": [], "error": str(e)}
+        return {"added": [], "skipped": [], "no_source": [], "failed": [], "error": str(e)}
 
     if not candidates:
         logger.warning("ИИ не предложил ни одного блюда")
-        return {"added": [], "skipped": [], "failed": [], "error": None}
+        return {"added": [], "skipped": [], "no_source": [], "failed": [], "error": None}
 
     added: list[str] = []
     skipped: list[tuple[str, str]] = []
+    no_source: list[str] = []
     failed: list[str] = []
 
     for dish_name in candidates:
+        if len(added) >= count:
+            break
         try:
             async with async_session() as session:
-                recipe, from_source = await _add_one(session, dish_name)
+                recipe = await _add_one(session, dish_name)
         except Exception as e:
             failed.append(dish_name)
             logger.error("Не удалось добавить «%s»: %s", dish_name, e)
             continue
 
-        if recipe.id in seen_ids:
+        if recipe is None:
+            no_source.append(dish_name)
+            logger.info("Пропущено (не нашлось страницы с настоящим рецептом): «%s»", dish_name)
+        elif recipe.id in seen_ids:
             skipped.append((dish_name, recipe.name))
             logger.info("Пропущено (уже есть похожий рецепт): «%s» -> «%s»", dish_name, recipe.name)
         else:
             seen_ids.add(recipe.id)
             added.append(recipe.name)
-            logger.info(
-                "Добавлен рецепт: %s%s", recipe.name, " (по ссылке)" if from_source else " (сгенерирован ИИ)"
-            )
+            logger.info("Добавлен рецепт (по ссылке): %s", recipe.name)
 
-    return {"added": added, "skipped": skipped, "failed": failed, "error": None}
+    return {"added": added, "skipped": skipped, "no_source": no_source, "failed": failed, "error": None}
 
 
 async def notify_admins(result: dict) -> None:
@@ -185,6 +202,8 @@ async def notify_admins(result: dict) -> None:
         if result["skipped"]:
             skipped_names = ", ".join(f"«{dish}»→«{existing}»" for dish, existing in result["skipped"])
             lines.append(f"⏭ Пропущено как дубли ({len(result['skipped'])}): {skipped_names}")
+        if result.get("no_source"):
+            lines.append(f"🔍 Не нашлось страницы с рецептом ({len(result['no_source'])}): {', '.join(result['no_source'])}")
         if result["failed"]:
             lines.append(f"❌ Не удалось добавить ({len(result['failed'])}): {', '.join(result['failed'])}")
 
@@ -217,8 +236,9 @@ async def main(count: int) -> None:
     result = await collect(count)
     await notify_admins(result)
     logger.info(
-        "Готово: добавлено %d, пропущено %d, ошибок %d",
-        len(result.get("added", [])), len(result.get("skipped", [])), len(result.get("failed", [])),
+        "Готово: добавлено %d, дублей %d, без источника %d, ошибок %d",
+        len(result.get("added", [])), len(result.get("skipped", [])),
+        len(result.get("no_source", [])), len(result.get("failed", [])),
     )
 
 
