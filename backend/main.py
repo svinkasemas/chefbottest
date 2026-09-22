@@ -135,12 +135,16 @@ def recipe_to_short(
         time_minutes=recipe.time_minutes,
         difficulty=recipe.difficulty,
         price_level=recipe.price_level,
-        calories=recipe.calories,
+        # round() - на случай, если в базе оказалось дробное значение (баг
+        # импорта/ИИ-парсинга, см. crud.create_recipe_from_ai_data), схема
+        # ответа RecipeShort.calories: int требует ровно целое число.
+        calories=round(recipe.calories) if recipe.calories is not None else 0,
         is_favorite=recipe.id in favorite_ids,
         photo_url=photo_url_for(recipe),
         is_restricted=bool(labels),
         restricted_labels=labels,
     )
+
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +308,7 @@ async def api_recipe_detail(
         emoji=recipe.category.emoji if recipe.category else "🍽",
         time_minutes=recipe.time_minutes,
         difficulty=recipe.difficulty,
-        calories=recipe.calories,
+        calories=round(recipe.calories) if recipe.calories is not None else 0,
         price_level=recipe.price_level,
         cuisine=recipe.cuisine,
         description=recipe.description,
