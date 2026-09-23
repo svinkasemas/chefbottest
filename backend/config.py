@@ -51,6 +51,16 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip() or None
 # но с ключом Pexels результаты обычно качественнее и разнообразнее.
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip() or None
 
+# Google Custom Search JSON API (поиск картинок) - ещё один источник кандидатов,
+# обычно точнее Openverse для нишевых домашних блюд. Нужен API-ключ
+# (Google Cloud Console - Credentials) и cx - id Programmable Search Engine
+# (https://programmablesearchengine.google.com/), настроенной на поиск
+# картинок по списку кулинарных сайтов и фотобанков (см. README - "поиск по
+# всему интернету" для новых поисковых систем Google больше не даёт включить).
+# Бесплатно 100 запросов/день, дальше платно - см. GOOGLE_SEARCH_API_KEY в .env.
+GOOGLE_SEARCH_API_KEY = os.getenv("GOOGLE_SEARCH_API_KEY", "").strip() or None
+GOOGLE_SEARCH_CX = os.getenv("GOOGLE_SEARCH_CX", "").strip() or None
+
 # Разрешить работу без проверки подписи Telegram (ТОЛЬКО для локальной разработки
 # в браузере, где нет initData). На проде должно быть False.
 DEV_MODE = os.getenv("DEV_MODE", "false").lower() == "true"
