@@ -85,7 +85,7 @@ def _search_openverse(query: str) -> str | None:
     return None
 
 
-def _translate_query_for_search(dish_name: str, cuisine: str | None) -> str:
+def _translate_query_for_search(dish_name: str, cuisine: str | None, is_drink: bool) -> str:
     """
     Переводит название блюда (и кухню, если есть) на английский перед
     поиском в Pexels/Openverse. Оба сервиса проиндексированы в основном по
@@ -93,15 +93,22 @@ def _translate_query_for_search(dish_name: str, cuisine: str | None) -> str:
     находит ничего релевантного и в итоге подставляет случайное/повторяющееся
     фото не по теме. Если перевод не удался (все ИИ-провайдеры недоступны) -
     используем название как есть (хуже релевантность, но поиск не падает).
+
+    is_drink - для рецептов из категории "Напитки" (коктейли, чай, комбуча и
+    т.п.) явно просим фото НАПИТКА, а не еды - иначе (см. баг-репорт
+    пользователя) для коктейля вроде "Блэк энд Тэн" находится фото боула с
+    едой: слово "food" в запросе уводит поиск не в ту сторону.
     """
+    subject = "напитка (коктейля/чая/лимонада и т.п.)" if is_drink else "блюда"
     cuisine_part = f", кухня «{cuisine}»" if cuisine else ""
     prompt = (
-        f'Название блюда: «{dish_name}»{cuisine_part}.\n\n'
-        f"Переведи название на английский язык и опиши блюдо коротким запросом "
-        f"для поиска ФОТОГРАФИИ этого конкретного блюда в стоковом фотобанке "
+        f'Название {subject}: «{dish_name}»{cuisine_part}.\n\n'
+        f"Переведи название на английский язык и опиши {subject} коротким "
+        f"запросом для поиска его ФОТОГРАФИИ в стоковом фотобанке "
         f"(Pexels/Openverse) - 3-6 английских слов, по которым с высокой "
-        f"вероятностью найдётся именно фото этого блюда, а не общая картинка "
-        f'еды. Ответь СТРОГО одним JSON-объектом без markdown-разметки: '
+        f"вероятностью найдётся именно фото {subject}, а не общая картинка "
+        f'{"напитка/бара" if is_drink else "еды"}. '
+        f'Ответь СТРОГО одним JSON-объектом без markdown-разметки: '
         f'{{"query": "english search phrase"}}'
     )
     try:
@@ -111,17 +118,23 @@ def _translate_query_for_search(dish_name: str, cuisine: str | None) -> str:
             return query
     except Exception as e:
         logger.warning("Не удалось перевести «%s» для поиска фото, ищу как есть: %s", dish_name, e)
-    return f"{dish_name} {cuisine} food" if cuisine else f"{dish_name} food"
+    suffix = "drink cocktail" if is_drink else "food"
+    return f"{dish_name} {cuisine} {suffix}" if cuisine else f"{dish_name} {suffix}"
 
 
-def search_dish_photo(dish_name: str, cuisine: str | None = None) -> str | None:
+def search_dish_photo(dish_name: str, cuisine: str | None = None, category: str | None = None) -> str | None:
     """
     Ищет фотографию блюда в свободных источниках (см. docstring модуля).
     Возвращает прямую ссылку на изображение или None, если ничего не
     нашлось ни в одном источнике - тогда рецепт остаётся без фото до
     следующего запуска scripts/generate_recipe_images.py.
+
+    category - название категории рецепта ("Напитки", "Десерты" и т.п., см.
+    backend.database.crud.CATEGORY_KEY_TO_NAME) - используется только чтобы
+    отличить напитки от остальных блюд (см. _translate_query_for_search).
     """
-    query = _translate_query_for_search(dish_name, cuisine)
+    is_drink = category == "Напитки"
+    query = _translate_query_for_search(dish_name, cuisine, is_drink)
     for search_fn in (_search_pexels, _search_openverse):
         url = search_fn(query)
         if url:
