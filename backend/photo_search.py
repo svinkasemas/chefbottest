@@ -26,11 +26,18 @@ _translate_query_for_search) - Pexels/Openverse проиндексированы
 кандидат перед принятием скачивается и проверяется через Gemini Vision
 (_photo_matches_dish) - действительно ли на нём изображено именно это
 блюдо. Берётся первый кандидат (из нескольких на запрос, по очереди у
-каждого источника), который подтверждён. Если ни один кандидат не
-подтверждён (или ничего не нашлось) - рисуем ИИ-иллюстрацию вместо того,
-чтобы поставить случайное фото. Такое фото помечается
-photo_source="ai_generated" (в отличие от "web_search" - подтверждённое
-настоящее фото), чтобы --replace-all мог впоследствии попробовать найти
+каждого источника), который подтверждён.
+
+Если Gemini Vision недоступен (нет ключа, рейтлимит и т.п.) - это НЕ
+считается отклонением кандидата: используется первый найденный кандидат
+без подтверждения (см. баг-репорт: при массовом рейтлимите 429 старая
+версия рисовала ИИ-картинку для КАЖДОГО рецепта подряд, потому что
+недоступность проверки трактовалась как "фото не подошло" - это
+превращало временный сбой одного провайдера в полный откат от "настоящих
+фото" к "рисуем всё подряд"). ИИ-иллюстрация рисуется только тогда, когда
+источники вообще не нашли ни одного кандидата. Такое фото помечается
+photo_source="ai_generated" (в отличие от "web_search" - найденное
+настоящее фото, подтверждённое или нет), чтобы --replace-all мог впоследствии попробовать найти
 для него настоящее фото ещё раз, когда результаты поиска станут лучше.
 """
 from __future__ import annotations
@@ -168,17 +175,21 @@ def _call_gemini_vision(prompt: str, image_bytes: bytes, use_proxy: bool) -> str
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def _photo_matches_dish(image_bytes: bytes, dish_name: str, cuisine: str | None, is_drink: bool) -> bool:
+def _photo_matches_dish(image_bytes: bytes, dish_name: str, cuisine: str | None, is_drink: bool) -> bool | None:
     """
     Просит Gemini Vision посмотреть на найденную картинку и подтвердить,
     что на ней действительно изображено это блюдо/напиток, а не что-то
     случайное, найденное по формальному совпадению слов в поисковом запросе
     (см. docstring модуля).
 
-    Возвращает True, только если Gemini явно ответил "да". Любая ошибка,
-    недоступность (нет ключа/лимит исчерпан) или неоднозначный ответ
-    считаются "нет" - без подтверждения лучше нарисовать ИИ-картинку, чем
-    показать случайное фото.
+    Возвращает True/False, если Gemini дал ответ, или None, если проверить
+    не удалось вообще (нет ключа, лимит исчерпан, сеть недоступна). None -
+    это НЕ "нет": вызывающий код (get_dish_photo) при None не отклоняет
+    кандидата, а использует его без подтверждения - иначе (см. баг-репорт:
+    при массовом рейтлимите Gemini 429 ИИ рисовало картинку для КАЖДОГО
+    рецепта подряд, хотя реальные фото были в порядке) недоступность
+    проверки превращается в "рисуем всё подряд", а не просто в отсутствие
+    лишней подстраховки.
     """
     subject = "напиток" if is_drink else "готовое блюдо"
     cuisine_part = f" ({cuisine} кухня)" if cuisine else ""
@@ -196,7 +207,7 @@ def _photo_matches_dish(image_bytes: bytes, dish_name: str, cuisine: str | None,
             logger.warning(
                 "Проверка фото для «%s» через Gemini Vision не удалась (прокси=%s): %s", dish_name, use_proxy, e
             )
-    return False
+    return None
 
 
 def _generate_ai_photo(search_query: str) -> bytes | None:
@@ -220,11 +231,13 @@ def get_dish_photo(
     Главная точка входа для подбора фото рецепта (см. docstring модуля).
 
     Возвращает (image_bytes, source):
-    - source="web_search" - настоящее фото, подтверждённое Gemini Vision.
-    - source="ai_generated" - ни один найденный кандидат не подтвердился
-      (или источники не нашли ничего) - нарисовано вместо этого.
-      image_bytes при этом может быть None, только если не получилось
-      вообще ничего - ни найти, ни нарисовать (например, сеть недоступна).
+    - source="web_search" - настоящее найденное фото: либо подтверждённое
+      Gemini Vision, либо (если проверить не удалось - см.
+      _photo_matches_dish) первый найденный кандидат без подтверждения.
+    - source="ai_generated" - источники не нашли вообще ни одного
+      кандидата - нарисовано вместо этого. image_bytes при этом может быть
+      None, только если не получилось вообще ничего - ни найти, ни
+      нарисовать (например, сеть недоступна).
 
     category - название категории рецепта ("Напитки", "Десерты" и т.п., см.
     backend.database.crud.CATEGORY_KEY_TO_NAME) - используется только чтобы
@@ -233,15 +246,38 @@ def get_dish_photo(
     is_drink = category == "Напитки"
     query = _translate_query_for_search(dish_name, cuisine, is_drink)
 
+    first_candidate_bytes: bytes | None = None
+    gemini_unavailable = False
+
     for search_fn in (_search_pexels, _search_openverse):
+        if gemini_unavailable and first_candidate_bytes is not None:
+            break
         for candidate_url in search_fn(query):
             image_bytes = _fetch_image_bytes(candidate_url)
             if image_bytes is None:
                 continue
-            if _photo_matches_dish(image_bytes, dish_name, cuisine, is_drink):
+            if first_candidate_bytes is None:
+                first_candidate_bytes = image_bytes
+            if gemini_unavailable:
+                # Gemini уже недоступен в этом запуске (см. ниже) - нет
+                # смысла тратить попытки на остальных кандидатов, первый
+                # найденный и так пойдёт в дело как неподтверждённый.
+                break
+            verdict = _photo_matches_dish(image_bytes, dish_name, cuisine, is_drink)
+            if verdict is True:
                 return image_bytes, "web_search"
+            if verdict is None:
+                gemini_unavailable = True
+                break
 
-    logger.info("Подтверждённого настоящего фото для «%s» не нашлось - рисую ИИ-иллюстрацию взамен", dish_name)
+    if first_candidate_bytes is not None:
+        logger.info(
+            "Настоящее фото для «%s» найдено, но не подтверждено (Gemini Vision недоступен) - "
+            "использую его как есть", dish_name,
+        )
+        return first_candidate_bytes, "web_search"
+
+    logger.info("Ни одного фото для «%s» не нашлось ни в одном источнике - рисую ИИ-иллюстрацию взамен", dish_name)
     return _generate_ai_photo(query), "ai_generated"
 
 
