@@ -21,6 +21,9 @@ class RecipeShort(BaseModel):
     calories: int
     is_favorite: bool = False
     photo_url: str | None = None
+    # Сколько всего пользователей (не только текущий) добавили рецепт в
+    # избранное - показывается как индикатор популярности блюда.
+    favorites_count: int = 0
     # Содержит ингредиент(ы) из пищевых ограничений пользователя (см.
     # backend/dietary.py) - карточка на фронтенде блюрится с предупреждением.
     is_restricted: bool = False
@@ -63,6 +66,7 @@ class RecipeDetail(BaseModel):
     ingredients: list[IngredientOut]
     steps: list[StepOut]
     is_favorite: bool
+    favorites_count: int = 0
     photo_url: str | None = None
     custom_time_minutes: int | None = None
     source_url: str | None = None
