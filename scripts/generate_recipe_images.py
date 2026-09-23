@@ -43,7 +43,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from backend.database.db import async_session, init_db
-from backend.database.models import Recipe
+from backend.database.models import Recipe, RecipeIngredient
 from backend.photo_search import get_dish_photo, save_photo_bytes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -56,10 +56,21 @@ async def _recipes_to_process(replace_all: bool) -> list[Recipe]:
     async with async_session() as session:
         # selectinload(Recipe.category) - категория нужна для поиска фото
         # (см. process_recipe/get_dish_photo: у напитков поиск должен
-        # просить фото напитка, а не еды), подгружаем сразу, чтобы обращение
-        # к recipe.category ниже не требовало отдельного запроса к уже
-        # закрытой сессии.
-        query = select(Recipe).where(Recipe.is_active.is_(True)).options(selectinload(Recipe.category))
+        # просить фото напитка, а не еды). selectinload(...ingredient_links...
+        # .ingredient) - список ингредиентов передаётся в проверку через
+        # Gemini Vision, чтобы отклонять фото, где на первом плане что-то,
+        # чего нет в составе рецепта (см. баг-репорт: фото "суккоташа" с
+        # преобладающим зелёным горошком для рецепта без горошка). Всё
+        # подгружаем сразу, чтобы обращение к этим полям ниже не требовало
+        # отдельного запроса к уже закрытой сессии.
+        query = (
+            select(Recipe)
+            .where(Recipe.is_active.is_(True))
+            .options(
+                selectinload(Recipe.category),
+                selectinload(Recipe.ingredient_links).selectinload(RecipeIngredient.ingredient),
+            )
+        )
         if replace_all:
             # Разовая замена: рецепты без фото ИЛИ с фото неизвестного
             # происхождения (старое, ещё не помеченное, либо нарисованное
@@ -78,12 +89,14 @@ async def _recipes_to_process(replace_all: bool) -> list[Recipe]:
         return list(result.scalars().all())
 
 
-async def process_recipe(recipe_id: int, name: str, cuisine: str | None, category: str | None) -> str | None:
+async def process_recipe(
+    recipe_id: int, name: str, cuisine: str | None, category: str | None, ingredients: list[str]
+) -> str | None:
     """
     Возвращает "web_search"/"ai_generated" (что удалось сохранить) или None,
     если не получилось вообще ничего.
     """
-    image_bytes, source = await asyncio.to_thread(get_dish_photo, name, cuisine, category)
+    image_bytes, source = await asyncio.to_thread(get_dish_photo, name, cuisine, category, ingredients)
     if image_bytes is None:
         logger.warning("  не удалось получить фото (ни найти, ни нарисовать): «%s»", name)
         return None
@@ -117,7 +130,8 @@ async def main(replace_all: bool) -> None:
     for i, recipe in enumerate(recipes, start=1):
         logger.info("[%d/%d] %s", i, len(recipes), recipe.name)
         category_name = recipe.category.name if recipe.category else None
-        source = await process_recipe(recipe.id, recipe.name, recipe.cuisine, category_name)
+        ingredient_names = [link.ingredient.name for link in recipe.ingredient_links if link.ingredient]
+        source = await process_recipe(recipe.id, recipe.name, recipe.cuisine, category_name, ingredient_names)
         if source == "web_search":
             found_real += 1
         elif source == "ai_generated":
