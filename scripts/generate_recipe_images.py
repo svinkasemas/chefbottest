@@ -30,8 +30,9 @@
 Пробный запуск на небольшом числе рецептов (например, после добавления
 нового источника фото - проверить результат, прежде чем гонять
 --replace-all по всей базе; рецепты сверх лимита в этот раз не трогаются,
-их текущие фото остаются как есть):
-    python -m scripts.generate_recipe_images --replace-all --limit 5
+их текущие фото остаются как есть) БЕЗ сохранения (--dry-run - ничего не
+пишет на диск/в базу, только логирует найденный источник):
+    python -m scripts.generate_recipe_images --replace-all --limit 5 --dry-run
 
 Пауза между запросами - вежливость к бесплатным API (Pexels/Openverse/
 Gemini), чтобы не упереться в рейт-лимит при обработке сразу многих
@@ -97,16 +98,29 @@ async def _recipes_to_process(replace_all: bool) -> list[Recipe]:
 
 
 async def process_recipe(
-    recipe_id: int, name: str, cuisine: str | None, category: str | None, ingredients: list[str]
+    recipe_id: int,
+    name: str,
+    cuisine: str | None,
+    category: str | None,
+    ingredients: list[str],
+    dry_run: bool = False,
 ) -> str | None:
     """
-    Возвращает "web_search"/"ai_generated" (что удалось сохранить) или None,
-    если не получилось вообще ничего.
+    Возвращает "web_search"/"ai_generated" (что удалось бы сохранить) или
+    None, если не получилось вообще ничего.
+
+    dry_run - только найти и залогировать результат (какой источник, сколько
+    байт), НИЧЕГО не сохраняя ни на диск, ни в базу - для пробного запуска,
+    не трогающего уже существующие фото стабильных рецептов (см. --dry-run).
     """
     image_bytes, source = await asyncio.to_thread(get_dish_photo, name, cuisine, category, ingredients)
     if image_bytes is None:
         logger.warning("  не удалось получить фото (ни найти, ни нарисовать): «%s»", name)
         return None
+
+    if dry_run:
+        logger.info("  [dry-run, не сохранено] источник: %s, размер: %d байт", source, len(image_bytes))
+        return source
 
     filename = await asyncio.to_thread(save_photo_bytes, recipe_id, image_bytes)
 
@@ -121,7 +135,7 @@ async def process_recipe(
     return source
 
 
-async def main(replace_all: bool, limit: int | None = None) -> None:
+async def main(replace_all: bool, limit: int | None = None, dry_run: bool = False) -> None:
     await init_db()
 
     recipes = await _recipes_to_process(replace_all)
@@ -139,7 +153,9 @@ async def main(replace_all: bool, limit: int | None = None) -> None:
         # запуск).
         recipes = recipes[:limit]
 
-    logger.info("Рецептов для обработки: %d (replace_all=%s, limit=%s)", len(recipes), replace_all, limit)
+    logger.info(
+        "Рецептов для обработки: %d (replace_all=%s, limit=%s, dry_run=%s)", len(recipes), replace_all, limit, dry_run
+    )
 
     found_real = 0
     found_ai = 0
@@ -147,7 +163,9 @@ async def main(replace_all: bool, limit: int | None = None) -> None:
         logger.info("[%d/%d] %s", i, len(recipes), recipe.name)
         category_name = recipe.category.name if recipe.category else None
         ingredient_names = [link.ingredient.name for link in recipe.ingredient_links if link.ingredient]
-        source = await process_recipe(recipe.id, recipe.name, recipe.cuisine, category_name, ingredient_names)
+        source = await process_recipe(
+            recipe.id, recipe.name, recipe.cuisine, category_name, ingredient_names, dry_run
+        )
         if source == "web_search":
             found_real += 1
         elif source == "ai_generated":
@@ -171,5 +189,9 @@ if __name__ == "__main__":
         "--limit", type=int, default=None,
         help="Обработать только первые N рецептов из списка (для пробного запуска, не трогает остальные)",
     )
+    parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Ничего не сохранять (ни на диск, ни в базу) - только показать в логе, что бы нашлось",
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.replace_all, args.limit))
+    asyncio.run(main(args.replace_all, args.limit, args.dry_run))
