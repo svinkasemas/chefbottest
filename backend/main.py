@@ -135,7 +135,11 @@ def recipe_restriction_labels(recipe, dietary_keys: list[str], custom_allergens:
 
 
 def recipe_to_short(
-    recipe, favorite_ids: set[int], dietary_keys: list[str] | None = None, custom_allergens: list[str] | None = None
+    recipe,
+    favorite_ids: set[int],
+    dietary_keys: list[str] | None = None,
+    custom_allergens: list[str] | None = None,
+    favorite_counts: dict[int, int] | None = None,
 ) -> RecipeShort:
     labels = recipe_restriction_labels(recipe, dietary_keys or [], custom_allergens or [])
     return RecipeShort(
@@ -151,6 +155,7 @@ def recipe_to_short(
         calories=round(recipe.calories) if recipe.calories is not None else 0,
         is_favorite=recipe.id in favorite_ids,
         photo_url=photo_url_for(recipe),
+        favorites_count=(favorite_counts or {}).get(recipe.id, 0),
         is_restricted=bool(labels),
         restricted_labels=labels,
     )
@@ -182,9 +187,13 @@ async def api_home_seasonal(db: AsyncSession = Depends(get_db), user: TelegramUs
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
     season = current_season()
     recipes = await crud.get_seasonal_recipes(db, season["keywords"])
+    favorite_counts = await crud.get_favorite_counts(db, [r.id for r in recipes])
     return SeasonalShelf(
         title=season["title"],
-        recipes=[recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens) for r in recipes],
+        recipes=[
+            recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens, favorite_counts)
+            for r in recipes
+        ],
     )
 
 
@@ -251,7 +260,11 @@ async def api_category_recipes(
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     recipes = await crud.get_recipes_by_category(db, category_id)
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
-    return [recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens) for r in recipes]
+    favorite_counts = await crud.get_favorite_counts(db, [r.id for r in recipes])
+    return [
+        recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens, favorite_counts)
+        for r in recipes
+    ]
 
 
 @app.get("/api/recipes/random", response_model=RecipeShort)
@@ -270,7 +283,8 @@ async def api_random_recipe(db: AsyncSession = Depends(get_db), user: TelegramUs
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
     recipe = await crud.get_recipe_full(db, random.choice(recipes).id)
-    return recipe_to_short(recipe, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens)
+    favorite_counts = await crud.get_favorite_counts(db, [recipe.id])
+    return recipe_to_short(recipe, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens, favorite_counts)
 
 
 @app.get("/api/recipes/{recipe_id}", response_model=RecipeDetail)
@@ -286,6 +300,7 @@ async def api_recipe_detail(
 
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
+    favorite_counts = await crud.get_favorite_counts(db, [recipe_id])
     customization = await crud.get_recipe_customization(db, db_user.id, recipe_id)
     step_notes = customization.step_notes if customization else {}
     restricted_labels = recipe_restriction_labels(recipe, db_user.dietary_restrictions, db_user.custom_allergens)
@@ -327,6 +342,7 @@ async def api_recipe_detail(
         ingredients=ingredients,
         steps=steps,
         is_favorite=recipe.id in favorite_ids,
+        favorites_count=favorite_counts.get(recipe.id, 0),
         photo_url=photo_url_for(recipe),
         custom_time_minutes=customization.custom_time_minutes if customization else None,
         source_url=recipe.source_url,
@@ -427,7 +443,11 @@ async def api_search(
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
     recipes = await crud.search_recipes(db, q)
-    return [recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens) for r in recipes]
+    favorite_counts = await crud.get_favorite_counts(db, [r.id for r in recipes])
+    return [
+        recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens, favorite_counts)
+        for r in recipes
+    ]
 
 
 @app.post("/api/recipes/generate", response_model=RecipeShort)
@@ -447,7 +467,8 @@ async def api_generate_recipe(
     # (ловит и точные совпадения, и вариации вида "Рыба фугу" / "Рыба фугу в соевом соусе")
     similar = await crud.find_similar_active_recipe(db, dish_name)
     if similar is not None:
-        return recipe_to_short(similar, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens)
+        favorite_counts = await crud.get_favorite_counts(db, [similar.id])
+        return recipe_to_short(similar, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens, favorite_counts)
 
     data: dict | None = None
     source_url: str | None = None
@@ -514,10 +535,13 @@ async def api_fridge_match(
 
     available = {i.strip().lower() for i in payload.ingredients}
     scored = await crud.find_recipes_by_available_ingredients(db, available)
+    favorite_counts = await crud.get_favorite_counts(db, [recipe.id for recipe, _, _, _ in scored])
 
     return [
         FridgeMatch(
-            recipe=recipe_to_short(recipe, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens),
+            recipe=recipe_to_short(
+                recipe, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens, favorite_counts
+            ),
             matched=matched,
             total=total,
             percent=round(matched / total * 100),
@@ -536,7 +560,11 @@ async def api_favorites(db: AsyncSession = Depends(get_db), user: TelegramUser =
     db_user = await crud.get_or_create_user(db, user.telegram_id, user.username, user.full_name)
     recipes = await crud.get_favorites(db, db_user.id)
     favorite_ids = await crud.get_favorite_ids(db, db_user.id)
-    return [recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens) for r in recipes]
+    favorite_counts = await crud.get_favorite_counts(db, [r.id for r in recipes])
+    return [
+        recipe_to_short(r, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens, favorite_counts)
+        for r in recipes
+    ]
 
 
 _SEAFOOD_KEYWORDS = ["рыба", "лосось", "треска", "судак", "сельдь", "форель", "тунец", "скумбри", "кальмар", "креветк", "морепродукт", "мидии", "краб", "осьминог"]
