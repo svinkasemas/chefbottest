@@ -6,7 +6,8 @@
    режим - или ВСЕ рецепты (кроме тех, что помечены как реальное фото со
    страницы-источника), если запущено с --replace-all - для разовой замены
    уже существующих картинок.
-2. Для каждого сначала ищется НАСТОЯЩАЯ фотография блюда в Pexels (если
+2. Для каждого сначала ищется НАСТОЯЩАЯ фотография блюда в Google Custom
+   Search (если заданы GOOGLE_SEARCH_API_KEY/GOOGLE_SEARCH_CX), Pexels (если
    задан PEXELS_API_KEY) и/или Openverse (без ключа); каждый найденный
    кандидат проверяется через Gemini Vision - действительно ли на нём
    изображено именно это блюдо (иначе поиск по словам иногда подсовывает
@@ -25,6 +26,12 @@
 (рецепты с photo_source="source_page" - настоящее фото с сайта-источника,
 добавленное вручную через админскую команду /import в bot.py - не трогаются):
     python -m scripts.generate_recipe_images --replace-all
+
+Пробный запуск на небольшом числе рецептов (например, после добавления
+нового источника фото - проверить результат, прежде чем гонять
+--replace-all по всей базе; рецепты сверх лимита в этот раз не трогаются,
+их текущие фото остаются как есть):
+    python -m scripts.generate_recipe_images --replace-all --limit 5
 
 Пауза между запросами - вежливость к бесплатным API (Pexels/Openverse/
 Gemini), чтобы не упереться в рейт-лимит при обработке сразу многих
@@ -114,7 +121,7 @@ async def process_recipe(
     return source
 
 
-async def main(replace_all: bool) -> None:
+async def main(replace_all: bool, limit: int | None = None) -> None:
     await init_db()
 
     recipes = await _recipes_to_process(replace_all)
@@ -123,7 +130,16 @@ async def main(replace_all: bool) -> None:
         logger.info("Обрабатывать нечего - у всех активных рецептов уже есть подходящее фото.")
         return
 
-    logger.info("Рецептов для обработки: %d (replace_all=%s)", len(recipes), replace_all)
+    if limit is not None:
+        # --limit - для пробного запуска на небольшом числе рецептов (например,
+        # после добавления нового источника фото), чтобы проверить результат
+        # перед тем как гонять --replace-all по всей базе. Уже существующие
+        # фото у необработанных в этот раз рецептов не трогаются - они как
+        # были, так и останутся (обработаются в следующий обычный/replace-all
+        # запуск).
+        recipes = recipes[:limit]
+
+    logger.info("Рецептов для обработки: %d (replace_all=%s, limit=%s)", len(recipes), replace_all, limit)
 
     found_real = 0
     found_ai = 0
@@ -151,5 +167,9 @@ if __name__ == "__main__":
         "--replace-all", action="store_true",
         help="Заменить ВСЕ фото, включая уже существующие (в т.ч. нарисованные ИИ раньше)",
     )
+    parser.add_argument(
+        "--limit", type=int, default=None,
+        help="Обработать только первые N рецептов из списка (для пробного запуска, не трогает остальные)",
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.replace_all))
+    asyncio.run(main(args.replace_all, args.limit))
