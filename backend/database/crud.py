@@ -392,6 +392,22 @@ async def get_favorite_ids(session: AsyncSession, user_id: int) -> set[int]:
     return {row[0] for row in result.all()}
 
 
+async def get_favorite_counts(session: AsyncSession, recipe_ids: list[int] | None = None) -> dict[int, int]:
+    """
+    Сколько ВСЕГО пользователей (а не только текущий) добавили каждый рецепт
+    в избранное - показывается на карточке/странице рецепта как "популярность"
+    (см. RecipeShort.favorites_count / RecipeDetail.favorites_count).
+    Один агрегирующий запрос на весь список, а не по одному на рецепт.
+    recipe_ids=None - посчитать сразу для всех рецептов, у которых есть хотя
+    бы одно избранное.
+    """
+    query = select(Favorite.recipe_id, func.count(Favorite.id)).group_by(Favorite.recipe_id)
+    if recipe_ids is not None:
+        query = query.where(Favorite.recipe_id.in_(recipe_ids))
+    result = await session.execute(query)
+    return {recipe_id: count for recipe_id, count in result.all()}
+
+
 async def get_favorites(session: AsyncSession, user_id: int) -> list[Recipe]:
     result = await session.execute(
         select(Recipe)
