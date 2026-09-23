@@ -38,6 +38,7 @@ import logging
 import time
 
 from sqlalchemy import or_, select
+from sqlalchemy.orm import selectinload
 
 from backend.database.db import async_session, init_db
 from backend.database.models import Recipe
@@ -51,7 +52,12 @@ REQUEST_DELAY_SECONDS = 2
 
 async def _recipes_to_process(replace_all: bool) -> list[Recipe]:
     async with async_session() as session:
-        query = select(Recipe).where(Recipe.is_active.is_(True))
+        # selectinload(Recipe.category) - категория нужна для поиска фото
+        # (см. process_recipe/search_dish_photo: у напитков поиск должен
+        # просить фото напитка, а не еды), подгружаем сразу, чтобы обращение
+        # к recipe.category ниже не требовало отдельного запроса к уже
+        # закрытой сессии.
+        query = select(Recipe).where(Recipe.is_active.is_(True)).options(selectinload(Recipe.category))
         if replace_all:
             # Разовая замена: рецепты без фото ИЛИ с фото неизвестного
             # происхождения (старое, ещё не помеченное - в т.ч. нарисованное
@@ -69,8 +75,8 @@ async def _recipes_to_process(replace_all: bool) -> list[Recipe]:
         return list(result.scalars().all())
 
 
-async def process_recipe(recipe_id: int, name: str, cuisine: str | None) -> bool:
-    photo_url = await asyncio.to_thread(search_dish_photo, name, cuisine)
+async def process_recipe(recipe_id: int, name: str, cuisine: str | None, category: str | None) -> bool:
+    photo_url = await asyncio.to_thread(search_dish_photo, name, cuisine, category)
     if not photo_url:
         logger.info("  фото не найдено: «%s»", name)
         return False
@@ -105,7 +111,8 @@ async def main(replace_all: bool) -> None:
     found = 0
     for i, recipe in enumerate(recipes, start=1):
         logger.info("[%d/%d] %s", i, len(recipes), recipe.name)
-        ok = await process_recipe(recipe.id, recipe.name, recipe.cuisine)
+        category_name = recipe.category.name if recipe.category else None
+        ok = await process_recipe(recipe.id, recipe.name, recipe.cuisine, category_name)
         if ok:
             found += 1
         if i < len(recipes):
