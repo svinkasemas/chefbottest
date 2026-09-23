@@ -175,12 +175,25 @@ def _call_gemini_vision(prompt: str, image_bytes: bytes, use_proxy: bool) -> str
     return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
-def _photo_matches_dish(image_bytes: bytes, dish_name: str, cuisine: str | None, is_drink: bool) -> bool | None:
+def _photo_matches_dish(
+    image_bytes: bytes,
+    dish_name: str,
+    cuisine: str | None,
+    is_drink: bool,
+    ingredients: list[str] | None = None,
+) -> bool | None:
     """
     Просит Gemini Vision посмотреть на найденную картинку и подтвердить,
     что на ней действительно изображено это блюдо/напиток, а не что-то
     случайное, найденное по формальному совпадению слов в поисковом запросе
     (см. docstring модуля).
+
+    ingredients - состав РЕЦЕПТА (не абстрактного блюда с таким названием) -
+    если задан, Gemini дополнительно сверяет, что видно на фото, с составом:
+    один и тот же общий "суккоташ" в разных источниках выглядит по-разному
+    (где-то с зелёным горошком, где-то без), и нужен снимок именно этого
+    рецепта, а не любой картинки с похожим названием (см. баг-репорт: фото
+    с преобладающим горошком для рецепта без горошка в составе).
 
     Возвращает True/False, если Gemini дал ответ, или None, если проверить
     не удалось вообще (нет ключа, лимит исчерпан, сеть недоступна). None -
@@ -193,8 +206,17 @@ def _photo_matches_dish(image_bytes: bytes, dish_name: str, cuisine: str | None,
     """
     subject = "напиток" if is_drink else "готовое блюдо"
     cuisine_part = f" ({cuisine} кухня)" if cuisine else ""
+    ingredients_part = ""
+    if ingredients:
+        ingredients_part = (
+            f' Состав по рецепту: {", ".join(ingredients[:10])}.'
+            f' Учти это при проверке: если на фото явно преобладает ингредиент, '
+            f'которого нет в этом списке (например, много зелёного горошка на фото, '
+            f'хотя горошка нет в составе) - это несовпадение, мелкие детали '
+            f'(специи, украшение, посуда) можно не учитывать.'
+        )
     prompt = (
-        f'На фотографии должно быть изображено {subject} «{dish_name}»{cuisine_part}. '
+        f'На фотографии должно быть изображено {subject} «{dish_name}»{cuisine_part}.{ingredients_part} '
         f'Это действительно оно? Ответь СТРОГО одним словом на русском: "да" или "нет". '
         f'Если на фото не готовое блюдо/напиток (сырые ингредиенты крупным планом, '
         f'специи, посторонний предмет, явно другое блюдо) - отвечай "нет".'
@@ -225,7 +247,10 @@ def _generate_ai_photo(search_query: str) -> bytes | None:
 
 
 def get_dish_photo(
-    dish_name: str, cuisine: str | None = None, category: str | None = None
+    dish_name: str,
+    cuisine: str | None = None,
+    category: str | None = None,
+    ingredients: list[str] | None = None,
 ) -> tuple[bytes | None, str]:
     """
     Главная точка входа для подбора фото рецепта (см. docstring модуля).
@@ -242,6 +267,9 @@ def get_dish_photo(
     category - название категории рецепта ("Напитки", "Десерты" и т.п., см.
     backend.database.crud.CATEGORY_KEY_TO_NAME) - используется только чтобы
     отличить напитки от остальных блюд при формировании запроса.
+    ingredients - состав РЕЦЕПТА (список названий ингредиентов) - передаётся
+    в проверку через Gemini Vision, чтобы отклонять фото с явно другим
+    составом (см. _photo_matches_dish). Необязателен.
     """
     is_drink = category == "Напитки"
     query = _translate_query_for_search(dish_name, cuisine, is_drink)
@@ -263,7 +291,7 @@ def get_dish_photo(
                 # смысла тратить попытки на остальных кандидатов, первый
                 # найденный и так пойдёт в дело как неподтверждённый.
                 break
-            verdict = _photo_matches_dish(image_bytes, dish_name, cuisine, is_drink)
+            verdict = _photo_matches_dish(image_bytes, dish_name, cuisine, is_drink, ingredients)
             if verdict is True:
                 return image_bytes, "web_search"
             if verdict is None:
