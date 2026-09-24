@@ -34,6 +34,11 @@
 пишет на диск/в базу, только логирует найденный источник):
     python -m scripts.generate_recipe_images --replace-all --limit 5 --dry-run
 
+Прицельный пробный запуск по конкретным категориям (--category, через
+запятую, подстрока без учёта регистра) - например, только напитки и
+соусы/закуски, без сохранения:
+    python -m scripts.generate_recipe_images --replace-all --category "Напитки,Соусы" --dry-run
+
 Пауза между запросами - вежливость к бесплатным API (Pexels/Openverse/
 Gemini), чтобы не упереться в рейт-лимит при обработке сразу многих
 рецептов. Учтите: с проверкой через Gemini Vision на рецепт теперь уходит
@@ -135,13 +140,28 @@ async def process_recipe(
     return source
 
 
-async def main(replace_all: bool, limit: int | None = None, dry_run: bool = False) -> None:
+async def main(
+    replace_all: bool, limit: int | None = None, dry_run: bool = False, categories: list[str] | None = None
+) -> None:
     await init_db()
 
     recipes = await _recipes_to_process(replace_all)
 
+    if categories:
+        # --category - оставить только рецепты из категорий, чьё название
+        # содержит одну из переданных подстрок (без учёта регистра). Удобно
+        # для прицельного пробного прогона по конкретным категориям
+        # (например "Напитки,Соусы") вместо первых N рецептов подряд из
+        # всей базы, которые могут все оказаться из одной и той же
+        # категории (супы и т.п.) и ничего не сказать про остальные.
+        needles = [c.strip().lower() for c in categories if c.strip()]
+        recipes = [
+            r for r in recipes
+            if r.category and any(needle in r.category.name.lower() for needle in needles)
+        ]
+
     if not recipes:
-        logger.info("Обрабатывать нечего - у всех активных рецептов уже есть подходящее фото.")
+        logger.info("Обрабатывать нечего - подходящих рецептов не нашлось (с учётом фильтров).")
         return
 
     if limit is not None:
@@ -193,5 +213,11 @@ if __name__ == "__main__":
         "--dry-run", action="store_true",
         help="Ничего не сохранять (ни на диск, ни в базу) - только показать в логе, что бы нашлось",
     )
+    parser.add_argument(
+        "--category", type=str, default=None,
+        help='Обработать только рецепты из категорий, чьё название содержит одну из этих подстрок '
+             '(через запятую, без учёта регистра), например: --category "Напитки,Соусы"',
+    )
     args = parser.parse_args()
-    asyncio.run(main(args.replace_all, args.limit, args.dry_run))
+    categories = args.category.split(",") if args.category else None
+    asyncio.run(main(args.replace_all, args.limit, args.dry_run, categories))
