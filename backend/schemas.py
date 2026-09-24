@@ -3,6 +3,14 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 
+
+class PhotoCreditOut(BaseModel):
+    provider: str
+    author: str | None = None
+    author_url: str | None = None
+    page_url: str | None = None
+    license: str | None = None
+
 class CategoryOut(BaseModel):
     id: int
     name: str
@@ -68,6 +76,7 @@ class RecipeDetail(BaseModel):
     is_favorite: bool
     favorites_count: int = 0
     photo_url: str | None = None
+    photo_credit: "PhotoCreditOut | None" = None
     custom_time_minutes: int | None = None
     source_url: str | None = None
     personal_note: str | None = None
