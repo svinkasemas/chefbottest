@@ -17,6 +17,8 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
+import time
 
 import requests
 
@@ -301,6 +303,50 @@ def suggest_new_dish_names(category_counts: dict[str, int], recent_names: list[s
     return [str(d).strip() for d in dishes if str(d).strip()][:count]
 
 
+# --- Пропуск заведомо нерабочих маршрутов ------------------------------------
+# С сервера часть маршрутов стабильно не работает (Groq напрямую - 403,
+# Gemini напрямую - 400/429). Раньше каждый запрос заново пробовал их все,
+# теряя секунды на каждом вызове. Теперь маршрут (провайдер + прокси/напрямую),
+# который упал _FAILS_BEFORE_COOLDOWN раз подряд, на время пропускается.
+# 429 (квота ключа) - пауза сразу для обоих маршрутов провайдера, но короче.
+_FAILS_BEFORE_COOLDOWN = 2
+_ROUTE_COOLDOWN_SECONDS = 30 * 60
+_RATE_LIMIT_COOLDOWN_SECONDS = 10 * 60
+
+_cooldown_lock = threading.Lock()
+_route_fail_streak: dict[tuple[str, bool], int] = {}
+_route_cooldown_until: dict[tuple[str, bool], float] = {}
+
+
+def _route_available(provider: str, use_proxy: bool) -> bool:
+    with _cooldown_lock:
+        return _route_cooldown_until.get((provider, use_proxy), 0) <= time.monotonic()
+
+
+def _note_route_result(provider: str, use_proxy: bool, exc: Exception | None) -> None:
+    key = (provider, use_proxy)
+    with _cooldown_lock:
+        if exc is None:
+            _route_fail_streak[key] = 0
+            return
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        streak = _route_fail_streak.get(key, 0) + 1
+        if streak < _FAILS_BEFORE_COOLDOWN:
+            _route_fail_streak[key] = streak
+            return
+        _route_fail_streak[key] = 0
+        if status == 429:
+            until = time.monotonic() + _RATE_LIMIT_COOLDOWN_SECONDS
+            for route in ((provider, False), (provider, True)):
+                _route_cooldown_until[route] = until
+            logger.info("%s: квота исчерпана (429) - пропускаю провайдера %d мин",
+                        provider, _RATE_LIMIT_COOLDOWN_SECONDS // 60)
+        else:
+            _route_cooldown_until[key] = time.monotonic() + _ROUTE_COOLDOWN_SECONDS
+            logger.info("%s(прокси=%s) не работает - пропускаю этот маршрут %d мин",
+                        provider, use_proxy, _ROUTE_COOLDOWN_SECONDS // 60)
+
+
 def _call_with_fallback(prompt: str, error_subject: str) -> dict:
     """
     Пробует по очереди: Gemini напрямую, Gemini через прокси,
@@ -321,15 +367,22 @@ def _call_with_fallback(prompt: str, error_subject: str) -> dict:
     ]
     errors: list[str] = []
 
-    for provider_name, use_proxy, call_fn in attempts:
+    available = [a for a in attempts if _route_available(a[0], a[1])]
+    # Если все маршруты на паузе - пробуем все: лучше потратить время,
+    # чем вообще не ответить.
+    for provider_name, use_proxy, call_fn in available or attempts:
         try:
             text = call_fn(prompt, use_proxy)
+            _note_route_result(provider_name, use_proxy, None)
             data = extract_json(text)
             logger.info(
                 "Запрос «%s» выполнен провайдером %s (прокси=%s)", error_subject, provider_name, use_proxy
             )
             return data
         except Exception as e:
+            if isinstance(e, requests.RequestException):
+                # Кривой JSON в ответе - проблема ответа модели, а не маршрута.
+                _note_route_result(provider_name, use_proxy, e)
             label = f"{provider_name}(прокси={use_proxy})"
             logger.warning("Не удалось выполнить «%s» через %s: %s", error_subject, label, e)
             errors.append(f"{label}: {e}")
