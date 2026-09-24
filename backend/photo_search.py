@@ -93,7 +93,9 @@ def _route_order(url: str) -> tuple[bool, ...]:
     host = _host(url)
     with _route_lock:
         if _proxy_first_until.get(host, 0) > time.monotonic():
-            return (True, False)
+            # Прямой путь недавно не работал - на это время его не пробуем
+            # вообще, иначе при сбое прокси снова ждём 15 с таймаута.
+            return (True,)
     return (False, True)
 
 
@@ -123,6 +125,17 @@ def _status_of(exc: Exception) -> int | None:
     return getattr(response, "status_code", None)
 
 
+def _is_rate_limit_403(exc: Exception) -> bool:
+    """Unsplash при исчерпании часового лимита отвечает 403 «Rate Limit Exceeded»."""
+    response = getattr(exc, "response", None)
+    if response is None or response.status_code != 403:
+        return False
+    try:
+        return "rate limit" in response.text.lower()
+    except Exception:
+        return False
+
+
 def _http(method: str, url: str, label: str, **kwargs) -> requests.Response:
     """
     Запрос с учётом маршрутизации (_route_order). Поднимает последнее
@@ -142,7 +155,7 @@ def _http(method: str, url: str, label: str, **kwargs) -> requests.Response:
             last_exc = e
             status = _status_of(e)
             logger.warning("%s не удалось (прокси=%s): %s", label, use_proxy, e)
-            if status in _NO_RETRY_STATUSES:
+            if status in _NO_RETRY_STATUSES or _is_rate_limit_403(e):
                 break
             if not use_proxy:
                 _note_direct_result(url, ok=False)
@@ -211,17 +224,34 @@ def _search_google_images(query: str) -> list[str]:
         return []
 
 
+# Лимит Unsplash считается по часам (демо-ключ - 50 запросов в час). Когда он
+# исчерпан, до начала следующего часа Unsplash пропускаем.
+_unsplash_disabled_until = 0.0
+
+
+def _disable_unsplash_until_next_hour() -> None:
+    global _unsplash_disabled_until
+    now = time.time()
+    seconds_left = 3600 - (now % 3600) + 5
+    _unsplash_disabled_until = time.monotonic() + seconds_left
+    logger.warning("Часовой лимит Unsplash исчерпан - пропускаю Unsplash ~%d мин", seconds_left // 60 + 1)
+
+
 def _search_unsplash(query: str) -> list[str]:
-    if not UNSPLASH_ACCESS_KEY:
+    if not UNSPLASH_ACCESS_KEY or _unsplash_disabled_until > time.monotonic():
         return []
     headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
     params = {"query": query, "per_page": CANDIDATES_PER_SOURCE, "orientation": "landscape"}
     try:
         response = _http("GET", "https://api.unsplash.com/search/photos",
                          f"Поиск фото «{query}» через Unsplash", headers=headers, params=params)
+        if response.headers.get("X-Ratelimit-Remaining") == "0":
+            _disable_unsplash_until_next_hour()
         results = response.json().get("results", [])
         return [r["urls"]["regular"] for r in results if r.get("urls", {}).get("regular")]
-    except Exception:
+    except Exception as e:
+        if _is_rate_limit_403(e):
+            _disable_unsplash_until_next_hour()
         return []
 
 
