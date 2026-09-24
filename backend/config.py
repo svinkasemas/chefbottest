@@ -51,6 +51,12 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "").strip() or None
 # но с ключом Pexels результаты обычно качественнее и разнообразнее.
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY", "").strip() or None
 
+# Unsplash API (https://unsplash.com/developers) - ещё один бесплатный источник
+# настоящих фото, наравне с Pexels. Ключ - "Access Key" созданного приложения
+# (не Secret Key - он для OAuth-флоу, здесь не нужен). Demo-тариф - 50
+# запросов в час, этого достаточно для ежедневного пополнения новых рецептов.
+UNSPLASH_ACCESS_KEY = os.getenv("UNSPLASH_ACCESS_KEY", "").strip() or None
+
 # Google Custom Search JSON API (поиск картинок) - ещё один источник кандидатов,
 # обычно точнее Openverse для нишевых домашних блюд. Нужен API-ключ
 # (Google Cloud Console - Credentials) и cx - id Programmable Search Engine
