@@ -80,6 +80,16 @@ class Recipe(Base):
     # пропускает; "ai_generated" и NULL, наоборот, пробуются заново - вдруг
     # теперь найдётся настоящее подтверждённое фото).
     photo_source: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Атрибуция фото из фотобанка (см. backend/photo_search.py, PhotoCredit):
+    # показывается под фото в Mini App. Для Openverse (CC BY) указание
+    # автора обязательно. Пусто для ИИ-иллюстраций, фото со страницы-
+    # источника и старых фото. Колонки добавляются в существующую базу
+    # через backend/database/photo_credit_migration.py.
+    photo_credit_provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    photo_credit_author: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    photo_credit_author_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    photo_credit_page_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    photo_credit_license: Mapped[str | None] = mapped_column(String(50), nullable=True)
     is_ai_generated: Mapped[bool] = mapped_column(Boolean, default=False)
     # Ссылка на исходный сайт, если рецепт был импортирован по URL
     # (см. backend/recipe_import.py) - для указания авторства/источника.
