@@ -127,6 +127,11 @@ MANUAL_PHOTOS: list[tuple[str, str]] = [
     ("Торт Захер", "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcTHKiasVQBP4Hh_eWfzI_pIMqFcnjc3x_s-MtMK0Ho7vA&s=10"),
     ("Чизкейк Нью Йорк", "https://annatomilchik.ru/wp-content/uploads/2021/07/chizkejk-nyu-jork.jpg"),
     ("Чизкейк классический", "https://pteat.ru/wp-content/uploads/2025/03/itogovoe-2-1536x1024.jpg.webp"),
+    # Напитки и соусы, не найденные в фотобанках (сентябрь 2026)
+    ("Кумыс из коровьего молока", "https://img-fotki.yandex.ru/get/5409/acronychal.b/0_73267_5850104d_XXL.jpg"),
+    ("Матбуха", "https://nyamkin.ru/images/recepts/medium/5e4f1e59221c0.jpg"),
+    ('Соус "Тысяча островов"', "https://www.photorecept.ru/wp-content/uploads/2022/08/recept-sousa-1000-ostrovov-903x1300.jpg"),
+    ("Масала-чай", "https://cdn.insales-shop.ru/files/1/4129/97423393/original/masala-tea-1756893337155.jpg"),
 ]
 
 
@@ -136,6 +141,15 @@ def _proxies(use_proxy: bool) -> dict | None:
     return None
 
 
+def _looks_like_image(data: bytes) -> bool:
+    return (
+        data[:3] == b"\xff\xd8\xff"                        # JPEG
+        or data[:8] == b"\x89PNG\r\n\x1a\n"                 # PNG
+        or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")   # WebP
+        or data[:6] in (b"GIF87a", b"GIF89a")
+    )
+
+
 def download_image_bytes(url: str) -> bytes | None:
     for use_proxy in (False, True):
         try:
@@ -143,7 +157,12 @@ def download_image_bytes(url: str) -> bytes | None:
                 url, headers=HEADERS, timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy)
             )
             response.raise_for_status()
-            return response.content
+            content = response.content
+            if not _looks_like_image(content):
+                # Мёртвая ссылка часто отдаёт 200 с HTML-страницей вместо картинки.
+                logger.warning("По ссылке %s пришла не картинка (%d байт) - пропускаю", url, len(content))
+                return None
+            return content
         except Exception as e:
             logger.warning("Не удалось скачать %s (прокси=%s): %s", url, use_proxy, e)
     return None
@@ -159,8 +178,15 @@ def find_recipe(name: str, all_recipes: list[Recipe], by_exact_name: dict[str, R
     return None
 
 
-async def run() -> None:
+async def run(only: list[str] | None = None) -> None:
     await init_db()
+    items = MANUAL_PHOTOS
+    if only:
+        # --only: обработать только записи, чьё название содержит одну из подстрок,
+        # чтобы не перекачивать весь список ради пары новых фото.
+        needles = [o.strip().lower() for o in only if o.strip()]
+        items = [(n, u) for n, u in MANUAL_PHOTOS if any(x in n.lower() for x in needles)]
+        logger.info("--only: к обработке %d из %d записей", len(items), len(MANUAL_PHOTOS))
 
     async with async_session() as session:
         all_recipes = list(
@@ -172,7 +198,7 @@ async def run() -> None:
     not_found: list[str] = []
     download_failed: list[str] = []
 
-    for name, url in MANUAL_PHOTOS:
+    for name, url in items:
         recipe = find_recipe(name, all_recipes, by_exact_name)
         if recipe is None:
             not_found.append(name)
@@ -200,11 +226,11 @@ async def run() -> None:
                 await session.commit()
 
         saved += 1
-        logger.info("[%d/%d] «%s» (id=%d) -> %s", saved, len(MANUAL_PHOTOS), recipe.name, recipe.id, filename)
+        logger.info("[%d/%d] «%s» (id=%d) -> %s", saved, len(items), recipe.name, recipe.id, filename)
 
     logger.info(
         "Готово: сохранено %d, не найдено в базе %d, не скачалось %d (из %d в списке).",
-        saved, len(not_found), len(download_failed), len(MANUAL_PHOTOS),
+        saved, len(not_found), len(download_failed), len(items),
     )
     if not_found:
         logger.info("Не найдены в базе (проверьте название): %s", "; ".join(not_found))
@@ -213,4 +239,10 @@ async def run() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Проставить фото рецептам вручную из списка MANUAL_PHOTOS")
+    parser.add_argument("--only", type=str, default=None,
+                        help='Только записи, чьё название содержит подстроку, например "Кумыс,Матбуха"')
+    args = parser.parse_args()
+    asyncio.run(run(args.only.split(",") if args.only else None))
