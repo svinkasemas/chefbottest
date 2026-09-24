@@ -6,19 +6,20 @@
 подходящая по смыслу картинка, а не пустое место или случайное чужое фото.
 
 Реальное фото ищется по очереди в:
-1. Google Custom Search (Programmable Search Engine, поиск картинок) -
-   обычно самый точный источник для нишевых домашних блюд, ищет по
-   заранее настроенному списку кулинарных сайтов и фотобанков (Google с
-   2023 года не даёт новым поисковым системам искать "по всему
-   интернету" - поэтому список сайтов, а не открытый веб-поиск). Нужны
-   GOOGLE_SEARCH_API_KEY и GOOGLE_SEARCH_CX (см. .env.example) - если не
-   заданы, источник пропускается.
-2. Pexels (https://www.pexels.com/api) - даёт хорошее качество и
+1. Unsplash (https://unsplash.com/developers) - даёт хорошее качество и
+   часто более удачные ракурсы для еды, чем Pexels. Нужен бесплатный
+   UNSPLASH_ACCESS_KEY (см. .env.example) - если не задан, источник
+   пропускается.
+2. Pexels (https://www.pexels.com/api) - тоже хорошее качество и
    разнообразие. Нужен бесплатный PEXELS_API_KEY (см. .env.example) -
    если не задан, этот источник просто пропускается.
 3. Openverse (https://openverse.org) - агрегатор изображений с открытыми
    лицензиями (Creative Commons и т.п.). Ключ не нужен вообще - работает
    "из коробки", даже если ничего из вышеперечисленного не настроено.
+
+(Google Custom Search рассматривался, но Google с некоторого момента закрыл
+Custom Search JSON API для новых клиентов - см. _search_google_images ниже,
+она есть в файле, но сознательно не используется в get_dish_photo.)
 
 Название блюда перед поиском переводится на английский (см.
 _translate_query_for_search) - Pexels/Openverse проиндексированы в основном
@@ -56,7 +57,14 @@ import urllib.parse
 import requests
 
 from backend.ai_recipe import _call_with_fallback
-from backend.config import GEMINI_API_KEY, GOOGLE_SEARCH_API_KEY, GOOGLE_SEARCH_CX, PEXELS_API_KEY, PROXY_URL
+from backend.config import (
+    GEMINI_API_KEY,
+    GOOGLE_SEARCH_API_KEY,
+    GOOGLE_SEARCH_CX,
+    PEXELS_API_KEY,
+    PROXY_URL,
+    UNSPLASH_ACCESS_KEY,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +102,27 @@ def _search_google_images(query: str) -> list[str]:
             return [item["link"] for item in items if item.get("link")]
         except Exception as e:
             logger.warning("Поиск фото «%s» через Google Images не удался (прокси=%s): %s", query, use_proxy, e)
+    return []
+
+
+def _search_unsplash(query: str) -> list[str]:
+    if not UNSPLASH_ACCESS_KEY:
+        return []
+    headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
+    params = {"query": query, "per_page": CANDIDATES_PER_SOURCE, "orientation": "landscape"}
+    for use_proxy in (False, True):
+        try:
+            response = requests.get(
+                "https://api.unsplash.com/search/photos", headers=headers, params=params,
+                timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy),
+            )
+            response.raise_for_status()
+            results = response.json().get("results", [])
+            # "regular" - ~1080px по длинной стороне, достаточно для карточки/
+            # страницы рецепта, не оригинал в полном размере.
+            return [r["urls"]["regular"] for r in results if r.get("urls", {}).get("regular")]
+        except Exception as e:
+            logger.warning("Поиск фото «%s» через Unsplash не удался (прокси=%s): %s", query, use_proxy, e)
     return []
 
 
@@ -309,7 +338,12 @@ def get_dish_photo(
     first_candidate_bytes: bytes | None = None
     gemini_unavailable = False
 
-    for search_fn in (_search_google_images, _search_pexels, _search_openverse):
+    # _search_google_images сюда сознательно не включён - Google с 2023 года
+    # закрыл Custom Search JSON API для новых клиентов (403 "This project
+    # does not have the access..." для любого нового ключа/проекта, сколько
+    # ни включай API в консоли - это не настраивается). Функция оставлена в
+    # файле на случай, если Google снова откроет доступ.
+    for search_fn in (_search_unsplash, _search_pexels, _search_openverse):
         if gemini_unavailable and first_candidate_bytes is not None:
             break
         for candidate_url in search_fn(query):
