@@ -1,60 +1,53 @@
 """
-Подбор фото для рецептов без фото: сначала пробуем найти настоящую,
-лицензионно чистую фотографию блюда в свободных источниках, а если для
-блюда не нашлось ничего подходящего - рисуем иллюстрацию через ИИ
-(Pollinations.ai) как запасной вариант, чтобы у рецепта в любом случае была
-подходящая по смыслу картинка, а не пустое место или случайное чужое фото.
+Подбор фото для рецептов: ищем настоящую, лицензионно чистую фотографию
+блюда в свободных источниках и проверяем её через Gemini Vision.
 
 Реальное фото ищется по очереди в:
-1. Unsplash (https://unsplash.com/developers) - даёт хорошее качество и
-   часто более удачные ракурсы для еды, чем Pexels. Нужен бесплатный
-   UNSPLASH_ACCESS_KEY (см. .env.example) - если не задан, источник
-   пропускается.
-2. Pexels (https://www.pexels.com/api) - тоже хорошее качество и
-   разнообразие. Нужен бесплатный PEXELS_API_KEY (см. .env.example) -
-   если не задан, этот источник просто пропускается.
-3. Openverse (https://openverse.org) - агрегатор изображений с открытыми
-   лицензиями (Creative Commons и т.п.). Ключ не нужен вообще - работает
-   "из коробки", даже если ничего из вышеперечисленного не настроено.
+1. Unsplash (нужен UNSPLASH_ACCESS_KEY, иначе источник пропускается).
+2. Pexels (нужен PEXELS_API_KEY, иначе источник пропускается).
+3. Openverse (без ключа).
 
-(Google Custom Search рассматривался, но Google с некоторого момента закрыл
-Custom Search JSON API для новых клиентов - см. _search_google_images ниже,
-она есть в файле, но сознательно не используется в get_dish_photo.)
+(Google Custom Search закрыт для новых клиентов - _search_google_images
+оставлена в файле, но в поиске не используется.)
 
-Название блюда перед поиском переводится на английский (см.
-_translate_query_for_search) - Pexels/Openverse проиндексированы в основном
-по англоязычным подписям, и поиск по русскому названию часто вообще не
-находил совпадений.
+Название блюда перед поиском переводится на английский
+(_translate_query_for_search). Кухню в запрос НЕ добавляем: модель
+превращала её в «Russian mayonnaise salad plate», «Chinese kombucha drink»
+и т.п., и поиск уходил не туда.
 
-ВАЖНО - проверка релевантности (см. баг-репорт пользователя: для «Куриных
-сердечек в сметане» находились сырники, для «Чили кон тыква» - фото
-рассыпанных специй, для нескольких разных супов - одна и та же фотография
-борща): поиск по ключевым словам у обоих источников иногда находит
-формально похожее, но по сути случайное фото. Поэтому КАЖДЫЙ найденный
-кандидат перед принятием скачивается и проверяется через Gemini Vision
-(_photo_matches_dish) - действительно ли на нём изображено именно это
-блюдо. Берётся первый кандидат (из нескольких на запрос, по очереди у
-каждого источника), который подтверждён.
+Проверка релевантности: каждый кандидат скачивается и проверяется через
+Gemini Vision (_photo_matches_dish). Возможные исходы:
+- подтверждён -> берём его;
+- отклонён -> НЕ используем ни при каких условиях (раньше здесь был баг:
+  если Gemini отклонил всех кандидатов, первый из них всё равно
+  возвращался как «неподтверждённый»);
+- проверить не удалось (квота/сеть) -> кандидат считается
+  неподтверждённым. Брать ли такие, решает вызывающий код
+  (allow_unverified).
 
-Если Gemini Vision недоступен (нет ключа, рейтлимит и т.п.) - это НЕ
-считается отклонением кандидата: используется первый найденный кандидат
-без подтверждения (см. баг-репорт: при массовом рейтлимите 429 старая
-версия рисовала ИИ-картинку для КАЖДОГО рецепта подряд, потому что
-недоступность проверки трактовалась как "фото не подошло" - это
-превращало временный сбой одного провайдера в полный откат от "настоящих
-фото" к "рисуем всё подряд"). ИИ-иллюстрация рисуется только тогда, когда
-источники вообще не нашли ни одного кандидата. Такое фото помечается
-photo_source="ai_generated" (в отличие от "web_search" - найденное
-настоящее фото, подтверждённое или нет), чтобы --replace-all мог впоследствии попробовать найти
-для него настоящее фото ещё раз, когда результаты поиска станут лучше.
+ИИ-иллюстрация (Pollinations) рисуется только если allow_ai=True и
+источники не нашли вообще ни одного кандидата.
+
+Сеть. С сервера часть сервисов напрямую недоступна (гео-блок/таймауты), а
+через прокси работает. Чтобы не тратить 15-30 секунд на заведомо
+провальный прямой запрос для каждого рецепта, модуль запоминает хосты, где
+прямой запрос несколько раз подряд не удался, и какое-то время ходит к ним
+сразу через прокси (_route_order).
+
+Gemini Vision. Если Gemini несколько раз подряд отвечает 429 (квота ключа,
+прокси тут не поможет), проверка отключается на время
+(_GEMINI_DISABLE_SECONDS) - кандидаты сразу считаются неподтверждёнными,
+без лишних запросов и пауз.
 """
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import threading
 import time
 import urllib.parse
+from dataclasses import dataclass
 
 import requests
 
@@ -71,30 +64,52 @@ from backend.config import (
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT_SECONDS = 15
-# Сколько кандидатов запрашивать у каждого источника - чтобы было из чего
-# выбирать, если первый результат не подтвердится проверкой релевантности.
 CANDIDATES_PER_SOURCE = 5
 
-# Пауза между запросами к Gemini (и переводом названия, и проверкой фото -
-# оба расходуют один и тот же лимит ключа) - без неё скрипт легко успевает
-# сделать несколько запросов подряд за секунды, что при пакетной обработке
-# рецептов упирается в бесплатный лимит Gemini почти на каждом вызове (см.
-# баг-репорт: массовые 429 -> проверка фото фактически не работает ->
-# случайные фото с Openverse (кот на книгах, нож и т.п.) проходят
-# неподтверждёнными). 4.5 сек между вызовами - около 13 запросов в минуту,
-# с запасом под типичный бесплатный лимит ~15 RPM.
-_GEMINI_MIN_INTERVAL_SECONDS = 4.5
-_gemini_rate_lock = threading.Lock()
-_gemini_last_call_at = 0.0
+# --- Маршрутизация: напрямую или через прокси -------------------------------
+
+# Сколько прямых неудач подряд для хоста, после которых начинаем ходить к нему
+# сразу через прокси, и на сколько (процесс бэкенда живёт долго - прямой
+# доступ может со временем восстановиться).
+_DIRECT_FAILS_BEFORE_PROXY_FIRST = 2
+_PROXY_FIRST_SECONDS = 30 * 60
+
+# HTTP-коды, при которых повтор через прокси бессмысленен: ошибка в запросе,
+# ключе или квоте ключа, а не в сети/гео-блоке.
+_NO_RETRY_STATUSES = {400, 401, 429}
+
+_route_lock = threading.Lock()
+_direct_fail_counts: dict[str, int] = {}
+_proxy_first_until: dict[str, float] = {}
 
 
-def _throttle_gemini() -> None:
-    global _gemini_last_call_at
-    with _gemini_rate_lock:
-        wait = _gemini_last_call_at + _GEMINI_MIN_INTERVAL_SECONDS - time.monotonic()
-        if wait > 0:
-            time.sleep(wait)
-        _gemini_last_call_at = time.monotonic()
+def _host(url: str) -> str:
+    return urllib.parse.urlparse(url).hostname or ""
+
+
+def _route_order(url: str) -> tuple[bool, ...]:
+    if not PROXY_URL:
+        return (False,)
+    host = _host(url)
+    with _route_lock:
+        if _proxy_first_until.get(host, 0) > time.monotonic():
+            return (True, False)
+    return (False, True)
+
+
+def _note_direct_result(url: str, ok: bool) -> None:
+    host = _host(url)
+    with _route_lock:
+        if ok:
+            _direct_fail_counts[host] = 0
+            return
+        fails = _direct_fail_counts.get(host, 0) + 1
+        if fails >= _DIRECT_FAILS_BEFORE_PROXY_FIRST:
+            _direct_fail_counts[host] = 0
+            _proxy_first_until[host] = time.monotonic() + _PROXY_FIRST_SECONDS
+            logger.info("%s напрямую не отвечает - дальше хожу к нему сначала через прокси", host)
+        else:
+            _direct_fail_counts[host] = fails
 
 
 def _proxies(use_proxy: bool) -> dict | None:
@@ -103,29 +118,97 @@ def _proxies(use_proxy: bool) -> dict | None:
     return None
 
 
+def _status_of(exc: Exception) -> int | None:
+    response = getattr(exc, "response", None)
+    return getattr(response, "status_code", None)
+
+
+def _http(method: str, url: str, label: str, **kwargs) -> requests.Response:
+    """
+    Запрос с учётом маршрутизации (_route_order). Поднимает последнее
+    исключение, если не удался ни один маршрут.
+    """
+    last_exc: Exception | None = None
+    for use_proxy in _route_order(url):
+        try:
+            response = requests.request(
+                method, url, timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy), **kwargs
+            )
+            response.raise_for_status()
+            if not use_proxy:
+                _note_direct_result(url, ok=True)
+            return response
+        except Exception as e:
+            last_exc = e
+            status = _status_of(e)
+            logger.warning("%s не удалось (прокси=%s): %s", label, use_proxy, e)
+            if status in _NO_RETRY_STATUSES:
+                break
+            if not use_proxy:
+                _note_direct_result(url, ok=False)
+    assert last_exc is not None
+    raise last_exc
+
+
+# --- Gemini: общий лимит и автоотключение проверки --------------------------
+
+_GEMINI_MIN_INTERVAL_SECONDS = 4.5
+_GEMINI_429_BEFORE_DISABLE = 3
+_GEMINI_DISABLE_SECONDS = 60 * 60
+
+_gemini_rate_lock = threading.Lock()
+_gemini_last_call_at = 0.0
+_gemini_429_streak = 0
+_gemini_disabled_until = 0.0
+
+
+def _gemini_disabled() -> bool:
+    return _gemini_disabled_until > time.monotonic()
+
+
+def _throttle_gemini() -> None:
+    global _gemini_last_call_at
+    if _gemini_disabled():
+        # Gemini всё равно отвечает 429 - паузы ради него не нужны.
+        return
+    with _gemini_rate_lock:
+        wait = _gemini_last_call_at + _GEMINI_MIN_INTERVAL_SECONDS - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _gemini_last_call_at = time.monotonic()
+
+
+def _note_gemini_result(status: int | None) -> None:
+    global _gemini_429_streak, _gemini_disabled_until
+    with _gemini_rate_lock:
+        if status == 429:
+            _gemini_429_streak += 1
+            if _gemini_429_streak >= _GEMINI_429_BEFORE_DISABLE:
+                _gemini_429_streak = 0
+                _gemini_disabled_until = time.monotonic() + _GEMINI_DISABLE_SECONDS
+                logger.warning(
+                    "Gemini %d раз подряд ответил 429 (квота ключа) - отключаю проверку фото на %d мин",
+                    _GEMINI_429_BEFORE_DISABLE, _GEMINI_DISABLE_SECONDS // 60,
+                )
+        elif status is None or status < 400:
+            _gemini_429_streak = 0
+
+
+# --- Поиск кандидатов -------------------------------------------------------
+
 def _search_google_images(query: str) -> list[str]:
     if not (GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_CX):
         return []
     params = {
-        "key": GOOGLE_SEARCH_API_KEY,
-        "cx": GOOGLE_SEARCH_CX,
-        "q": query,
-        "searchType": "image",
-        "num": CANDIDATES_PER_SOURCE,
-        "safe": "active",
+        "key": GOOGLE_SEARCH_API_KEY, "cx": GOOGLE_SEARCH_CX, "q": query,
+        "searchType": "image", "num": CANDIDATES_PER_SOURCE, "safe": "active",
     }
-    for use_proxy in (False, True):
-        try:
-            response = requests.get(
-                "https://www.googleapis.com/customsearch/v1", params=params,
-                timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy),
-            )
-            response.raise_for_status()
-            items = response.json().get("items", [])
-            return [item["link"] for item in items if item.get("link")]
-        except Exception as e:
-            logger.warning("Поиск фото «%s» через Google Images не удался (прокси=%s): %s", query, use_proxy, e)
-    return []
+    try:
+        response = _http("GET", "https://www.googleapis.com/customsearch/v1",
+                         f"Поиск фото «{query}» через Google Images", params=params)
+        return [item["link"] for item in response.json().get("items", []) if item.get("link")]
+    except Exception:
+        return []
 
 
 def _search_unsplash(query: str) -> list[str]:
@@ -133,20 +216,13 @@ def _search_unsplash(query: str) -> list[str]:
         return []
     headers = {"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"}
     params = {"query": query, "per_page": CANDIDATES_PER_SOURCE, "orientation": "landscape"}
-    for use_proxy in (False, True):
-        try:
-            response = requests.get(
-                "https://api.unsplash.com/search/photos", headers=headers, params=params,
-                timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy),
-            )
-            response.raise_for_status()
-            results = response.json().get("results", [])
-            # "regular" - ~1080px по длинной стороне, достаточно для карточки/
-            # страницы рецепта, не оригинал в полном размере.
-            return [r["urls"]["regular"] for r in results if r.get("urls", {}).get("regular")]
-        except Exception as e:
-            logger.warning("Поиск фото «%s» через Unsplash не удался (прокси=%s): %s", query, use_proxy, e)
-    return []
+    try:
+        response = _http("GET", "https://api.unsplash.com/search/photos",
+                         f"Поиск фото «{query}» через Unsplash", headers=headers, params=params)
+        results = response.json().get("results", [])
+        return [r["urls"]["regular"] for r in results if r.get("urls", {}).get("regular")]
+    except Exception:
+        return []
 
 
 def _search_pexels(query: str) -> list[str]:
@@ -154,20 +230,13 @@ def _search_pexels(query: str) -> list[str]:
         return []
     headers = {"Authorization": PEXELS_API_KEY}
     params = {"query": query, "per_page": CANDIDATES_PER_SOURCE, "orientation": "landscape"}
-    for use_proxy in (False, True):
-        try:
-            response = requests.get(
-                "https://api.pexels.com/v1/search", headers=headers, params=params,
-                timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy),
-            )
-            response.raise_for_status()
-            photos = response.json().get("photos", [])
-            # "large" - хорошее разрешение под карточку рецепта, не оригинал
-            # в полном размере (экономим трафик/место).
-            return [p["src"]["large"] for p in photos if p.get("src", {}).get("large")]
-        except Exception as e:
-            logger.warning("Поиск фото «%s» через Pexels не удался (прокси=%s): %s", query, use_proxy, e)
-    return []
+    try:
+        response = _http("GET", "https://api.pexels.com/v1/search",
+                         f"Поиск фото «{query}» через Pexels", headers=headers, params=params)
+        photos = response.json().get("photos", [])
+        return [p["src"]["large"] for p in photos if p.get("src", {}).get("large")]
+    except Exception:
+        return []
 
 
 def _search_openverse(query: str) -> list[str]:
@@ -175,58 +244,70 @@ def _search_openverse(query: str) -> list[str]:
         "q": query, "page_size": CANDIDATES_PER_SOURCE, "license_type": "commercial",
         "category": "photograph", "mature": "false",
     }
-    for use_proxy in (False, True):
-        try:
-            response = requests.get(
-                "https://api.openverse.org/v1/images/", params=params,
-                timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy),
-            )
-            response.raise_for_status()
-            results = response.json().get("results", [])
-            return [r["url"] for r in results if r.get("url")]
-        except Exception as e:
-            logger.warning("Поиск фото «%s» через Openverse не удался (прокси=%s): %s", query, use_proxy, e)
-    return []
+    try:
+        response = _http("GET", "https://api.openverse.org/v1/images/",
+                         f"Поиск фото «{query}» через Openverse", params=params)
+        return [r["url"] for r in response.json().get("results", []) if r.get("url")]
+    except Exception:
+        return []
+
+
+_PROVIDERS = (
+    ("unsplash", _search_unsplash),
+    ("pexels", _search_pexels),
+    ("openverse", _search_openverse),
+)
 
 
 def _fetch_image_bytes(url: str) -> bytes | None:
-    for use_proxy in (False, True):
-        try:
-            response = requests.get(url, timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy))
-            response.raise_for_status()
-            return response.content
-        except Exception as e:
-            logger.warning("Не удалось скачать изображение (прокси=%s): %s", use_proxy, e)
+    try:
+        return _http("GET", url, "Скачивание изображения").content
+    except Exception:
+        return None
+
+
+def _image_mime(data: bytes) -> str | None:
+    """MIME по сигнатуре файла; None - это не картинка (HTML-заглушка и т.п.)."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[:6] in (b"GIF87a", b"GIF89a"):
+        return "image/gif"
     return None
 
 
-def _translate_query_for_search(dish_name: str, cuisine: str | None, is_drink: bool) -> str:
-    """
-    Переводит название блюда (и кухню, если есть) на английский перед
-    поиском в Pexels/Openverse (см. docstring модуля). Если перевод не
-    удался (все ИИ-провайдеры недоступны) - используем название как есть
-    (хуже релевантность, но поиск не падает).
+def photo_hash(image_bytes: bytes) -> str:
+    return hashlib.sha1(image_bytes).hexdigest()
 
-    is_drink - для рецептов из категории "Напитки" (коктейли, чай, комбуча и
-    т.п.) явно просим фото НАПИТКА, а не еды - иначе (см. баг-репорт
-    пользователя) для коктейля вроде "Блэк энд Тэн" находится фото боула с
-    едой: слово "food" в запросе уводит поиск не в ту сторону.
+
+# --- Перевод запроса --------------------------------------------------------
+
+def _translate_query_for_search(dish_name: str, category: str | None, is_drink: bool) -> str:
+    """
+    Переводит название на английский и делает из него короткий запрос для
+    фотобанка. Кухню сознательно не передаём (см. docstring модуля);
+    категория передаётся как подсказка (соус это или напиток).
     """
     subject = "напитка (коктейля/чая/лимонада и т.п.)" if is_drink else "блюда"
-    cuisine_part = f", кухня «{cuisine}»" if cuisine else ""
+    category_part = f", категория рецепта «{category}»" if category else ""
     prompt = (
-        f'Название {subject}: «{dish_name}»{cuisine_part}.\n\n'
-        f"Переведи название на английский язык и опиши {subject} коротким "
-        f"запросом для поиска его ФОТОГРАФИИ в стоковом фотобанке "
-        f"(Pexels/Openverse) - 3-6 английских слов, по которым с высокой "
-        f"вероятностью найдётся именно фото {subject}, а не общая картинка "
-        f'{"напитка/бара" if is_drink else "еды"}. '
+        f"Название {subject}: «{dish_name}»{category_part}.\n\n"
+        f"Переведи название на английский и сделай из него запрос для поиска "
+        f"ФОТОГРАФИИ в стоковом фотобанке (Unsplash/Pexels) - 2-5 английских "
+        f"слов, по которым найдётся именно это {'напиток' if is_drink else 'блюдо'}. "
+        f"Правила: не добавляй страну или национальность кухни (Russian, Italian, "
+        f"Chinese и т.п.), если она не входит в само общепринятое название "
+        f"(как в «French toast»). Для соуса пиши, что это соус (например "
+        f"«mayonnaise sauce in bowl»), чтобы не найти блюдо, которое им заправлено. "
+        f"Если название авторское и непереводимое, опиши, что это по сути "
+        f"(например «creamy garlic sauce»). "
         f'Ответь СТРОГО одним JSON-объектом без markdown-разметки: '
         f'{{"query": "english search phrase"}}'
     )
     try:
-        # _call_with_fallback пробует gemini первым - придерживаем общий
-        # лимит вместе с _call_gemini_vision (см. _throttle_gemini).
         _throttle_gemini()
         data = _call_with_fallback(prompt, error_subject=f"перевод названия «{dish_name}» для поиска фото")
         query = str(data.get("query", "")).strip()
@@ -234,11 +315,12 @@ def _translate_query_for_search(dish_name: str, cuisine: str | None, is_drink: b
             return query
     except Exception as e:
         logger.warning("Не удалось перевести «%s» для поиска фото, ищу как есть: %s", dish_name, e)
-    suffix = "drink cocktail" if is_drink else "food"
-    return f"{dish_name} {cuisine} {suffix}" if cuisine else f"{dish_name} {suffix}"
+    return f"{dish_name} {'drink' if is_drink else 'food'}"
 
 
-def _call_gemini_vision(prompt: str, image_bytes: bytes, use_proxy: bool) -> str:
+# --- Проверка через Gemini Vision -------------------------------------------
+
+def _call_gemini_vision(prompt: str, image_bytes: bytes, mime: str) -> str:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY не задан")
     _throttle_gemini()
@@ -248,90 +330,161 @@ def _call_gemini_vision(prompt: str, image_bytes: bytes, use_proxy: bool) -> str
         "contents": [{
             "parts": [
                 {"text": prompt},
-                {"inline_data": {
-                    "mime_type": "image/jpeg",
-                    "data": base64.b64encode(image_bytes).decode("ascii"),
-                }},
+                {"inline_data": {"mime_type": mime, "data": base64.b64encode(image_bytes).decode("ascii")}},
             ]
         }]
     }
-    response = requests.post(
-        url, json=payload, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy)
-    )
-    response.raise_for_status()
-    data = response.json()
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    try:
+        response = _http("POST", url, "Проверка фото через Gemini Vision", json=payload, headers=headers)
+    except Exception as e:
+        _note_gemini_result(_status_of(e))
+        raise
+    _note_gemini_result(response.status_code)
+    return response.json()["candidates"][0]["content"]["parts"][0]["text"]
 
 
 def _photo_matches_dish(
     image_bytes: bytes,
+    mime: str,
     dish_name: str,
     cuisine: str | None,
     is_drink: bool,
     ingredients: list[str] | None = None,
 ) -> bool | None:
     """
-    Просит Gemini Vision посмотреть на найденную картинку и подтвердить,
-    что на ней действительно изображено это блюдо/напиток, а не что-то
-    случайное, найденное по формальному совпадению слов в поисковом запросе
-    (см. docstring модуля).
-
-    ingredients - состав РЕЦЕПТА (не абстрактного блюда с таким названием) -
-    если задан, Gemini дополнительно сверяет, что видно на фото, с составом:
-    один и тот же общий "суккоташ" в разных источниках выглядит по-разному
-    (где-то с зелёным горошком, где-то без), и нужен снимок именно этого
-    рецепта, а не любой картинки с похожим названием (см. баг-репорт: фото
-    с преобладающим горошком для рецепта без горошка в составе).
-
-    Возвращает True/False, если Gemini дал ответ, или None, если проверить
-    не удалось вообще (нет ключа, лимит исчерпан, сеть недоступна). None -
-    это НЕ "нет": вызывающий код (get_dish_photo) при None не отклоняет
-    кандидата, а использует его без подтверждения - иначе (см. баг-репорт:
-    при массовом рейтлимите Gemini 429 ИИ рисовало картинку для КАЖДОГО
-    рецепта подряд, хотя реальные фото были в порядке) недоступность
-    проверки превращается в "рисуем всё подряд", а не просто в отсутствие
-    лишней подстраховки.
+    True/False - ответ Gemini; None - проверить не удалось (нет ключа,
+    квота, сеть, проверка временно отключена). None - это НЕ «нет».
     """
+    if not GEMINI_API_KEY or _gemini_disabled():
+        return None
     subject = "напиток" if is_drink else "готовое блюдо"
     cuisine_part = f" ({cuisine} кухня)" if cuisine else ""
     ingredients_part = ""
     if ingredients:
         ingredients_part = (
             f' Состав по рецепту: {", ".join(ingredients[:10])}.'
-            f' Учти это при проверке: если на фото явно преобладает ингредиент, '
-            f'которого нет в этом списке (например, много зелёного горошка на фото, '
-            f'хотя горошка нет в составе) - это несовпадение, мелкие детали '
-            f'(специи, украшение, посуда) можно не учитывать.'
+            f" Учти это при проверке: если на фото явно преобладает ингредиент, "
+            f"которого нет в этом списке (например, много зелёного горошка на фото, "
+            f"хотя горошка нет в составе) - это несовпадение, мелкие детали "
+            f"(специи, украшение, посуда) можно не учитывать."
         )
     prompt = (
-        f'На фотографии должно быть изображено {subject} «{dish_name}»{cuisine_part}.{ingredients_part} '
+        f"На фотографии должно быть изображено {subject} «{dish_name}»{cuisine_part}.{ingredients_part} "
         f'Это действительно оно? Ответь СТРОГО одним словом на русском: "да" или "нет". '
-        f'Если на фото не готовое блюдо/напиток (сырые ингредиенты крупным планом, '
+        f"Если на фото не готовое блюдо/напиток (сырые ингредиенты крупным планом, "
         f'специи, посторонний предмет, явно другое блюдо) - отвечай "нет".'
     )
-    for use_proxy in (False, True):
-        try:
-            text = _call_gemini_vision(prompt, image_bytes, use_proxy)
-            return text.strip().lower().startswith("да")
-        except Exception as e:
-            logger.warning(
-                "Проверка фото для «%s» через Gemini Vision не удалась (прокси=%s): %s", dish_name, use_proxy, e
-            )
-    return None
+    try:
+        text = _call_gemini_vision(prompt, image_bytes, mime)
+    except Exception:
+        return None
+    return text.strip().lower().startswith("да")
 
+
+# --- ИИ-иллюстрация ---------------------------------------------------------
 
 def _generate_ai_photo(search_query: str) -> bytes | None:
-    """
-    Рисует иллюстрацию через Pollinations.ai (бесплатно, без ключа) -
-    запасной вариант на случай, если не нашлось ни одной подтверждённо
-    похожей настоящей фотографии (см. docstring модуля). search_query - уже
-    переведённый на английский запрос из _translate_query_for_search,
-    переиспользуем его вместо повторного перевода.
-    """
     prompt = f"professional food photography of {search_query}, appetizing, realistic, high quality"
     encoded = urllib.parse.quote(prompt)
     url = f"https://image.pollinations.ai/prompt/{encoded}?width=800&height=600&nologo=true"
     return _fetch_image_bytes(url)
+
+
+# --- Главная точка входа ----------------------------------------------------
+
+@dataclass
+class PhotoResult:
+    image_bytes: bytes | None
+    # "web_search" - настоящее фото; "ai_generated" - нарисовано;
+    # None - ничего не взято (текущее фото рецепта не трогать).
+    source: str | None
+    provider: str | None = None     # unsplash / pexels / openverse / pollinations
+    verified: bool = False          # подтверждено Gemini Vision
+    query: str = ""
+    reason: str = ""                # почему ничего не взято (для лога/отчёта)
+
+
+def find_dish_photo(
+    dish_name: str,
+    cuisine: str | None = None,
+    category: str | None = None,
+    ingredients: list[str] | None = None,
+    *,
+    allow_unverified: bool = True,
+    allow_ai: bool = True,
+    exclude_hashes: set[str] | None = None,
+) -> PhotoResult:
+    """
+    allow_unverified - брать ли кандидата, которого не удалось проверить
+    (Gemini недоступен). Отклонённые Gemini кандидаты не берутся никогда.
+    allow_ai - рисовать ли иллюстрацию, если кандидатов не нашлось вообще.
+    exclude_hashes - хэши картинок, уже назначенных другим рецептам (чтобы
+    «Соус для стейка» и «Соус грейви» не получили одно и то же фото).
+    """
+    is_drink = category == "Напитки"
+    query = _translate_query_for_search(dish_name, category, is_drink)
+    logger.info("  запрос для поиска: «%s»", query)
+
+    unverified: tuple[bytes, str] | None = None
+    any_candidate = False
+    rejected = 0
+    duplicates = 0
+    vision_down = False
+
+    for provider, search_fn in _PROVIDERS:
+        if vision_down and unverified is not None:
+            break
+        for candidate_url in search_fn(query):
+            image_bytes = _fetch_image_bytes(candidate_url)
+            if image_bytes is None:
+                continue
+            mime = _image_mime(image_bytes)
+            if mime is None:
+                continue
+            if exclude_hashes and photo_hash(image_bytes) in exclude_hashes:
+                duplicates += 1
+                logger.info("  кандидат из %s уже назначен другому рецепту - пропускаю", provider)
+                continue
+            any_candidate = True
+
+            verdict = None if vision_down else _photo_matches_dish(
+                image_bytes, mime, dish_name, cuisine, is_drink, ingredients
+            )
+            if verdict is True:
+                return PhotoResult(image_bytes, "web_search", provider, True, query)
+            if verdict is False:
+                rejected += 1
+                logger.info("  кандидат из %s отклонён проверкой Gemini", provider)
+                continue
+            # Проверить не удалось - дальше проверять других бессмысленно.
+            vision_down = True
+            if unverified is None:
+                unverified = (image_bytes, provider)
+            break
+
+    if unverified is not None:
+        image_bytes, provider = unverified
+        if allow_unverified:
+            logger.info("  фото из %s не подтверждено (Gemini недоступен) - беру как есть", provider)
+            return PhotoResult(image_bytes, "web_search", provider, False, query)
+        logger.info("  фото из %s найдено, но не подтверждено - пропускаю, текущее фото остаётся", provider)
+        return PhotoResult(None, None, provider, False, query, reason="не подтверждено")
+
+    if any_candidate:
+        logger.info("  все %d кандидатов отклонены проверкой - текущее фото остаётся", rejected)
+        return PhotoResult(None, None, None, False, query, reason=f"отклонено кандидатов: {rejected}")
+
+    if duplicates:
+        return PhotoResult(None, None, None, False, query, reason="только дубли уже назначенных фото")
+
+    if allow_ai:
+        logger.info("  ни одного фото не нашлось - рисую ИИ-иллюстрацию")
+        image_bytes = _generate_ai_photo(query)
+        if image_bytes is not None:
+            return PhotoResult(image_bytes, "ai_generated", "pollinations", False, query)
+        return PhotoResult(None, None, None, False, query, reason="не нашлось и не нарисовалось")
+
+    return PhotoResult(None, None, None, False, query, reason="ничего не нашлось")
 
 
 def get_dish_photo(
@@ -340,73 +493,12 @@ def get_dish_photo(
     category: str | None = None,
     ingredients: list[str] | None = None,
 ) -> tuple[bytes | None, str]:
-    """
-    Главная точка входа для подбора фото рецепта (см. docstring модуля).
-
-    Возвращает (image_bytes, source):
-    - source="web_search" - настоящее найденное фото: либо подтверждённое
-      Gemini Vision, либо (если проверить не удалось - см.
-      _photo_matches_dish) первый найденный кандидат без подтверждения.
-    - source="ai_generated" - источники не нашли вообще ни одного
-      кандидата - нарисовано вместо этого. image_bytes при этом может быть
-      None, только если не получилось вообще ничего - ни найти, ни
-      нарисовать (например, сеть недоступна).
-
-    category - название категории рецепта ("Напитки", "Десерты" и т.п., см.
-    backend.database.crud.CATEGORY_KEY_TO_NAME) - используется только чтобы
-    отличить напитки от остальных блюд при формировании запроса.
-    ingredients - состав РЕЦЕПТА (список названий ингредиентов) - передаётся
-    в проверку через Gemini Vision, чтобы отклонять фото с явно другим
-    составом (см. _photo_matches_dish). Необязателен.
-    """
-    is_drink = category == "Напитки"
-    query = _translate_query_for_search(dish_name, cuisine, is_drink)
-
-    first_candidate_bytes: bytes | None = None
-    gemini_unavailable = False
-
-    # _search_google_images сюда сознательно не включён - Google с 2023 года
-    # закрыл Custom Search JSON API для новых клиентов (403 "This project
-    # does not have the access..." для любого нового ключа/проекта, сколько
-    # ни включай API в консоли - это не настраивается). Функция оставлена в
-    # файле на случай, если Google снова откроет доступ.
-    for search_fn in (_search_unsplash, _search_pexels, _search_openverse):
-        if gemini_unavailable and first_candidate_bytes is not None:
-            break
-        for candidate_url in search_fn(query):
-            image_bytes = _fetch_image_bytes(candidate_url)
-            if image_bytes is None:
-                continue
-            if first_candidate_bytes is None:
-                first_candidate_bytes = image_bytes
-            if gemini_unavailable:
-                # Gemini уже недоступен в этом запуске (см. ниже) - нет
-                # смысла тратить попытки на остальных кандидатов, первый
-                # найденный и так пойдёт в дело как неподтверждённый.
-                break
-            verdict = _photo_matches_dish(image_bytes, dish_name, cuisine, is_drink, ingredients)
-            if verdict is True:
-                return image_bytes, "web_search"
-            if verdict is None:
-                gemini_unavailable = True
-                break
-
-    if first_candidate_bytes is not None:
-        logger.info(
-            "Настоящее фото для «%s» найдено, но не подтверждено (Gemini Vision недоступен) - "
-            "использую его как есть", dish_name,
-        )
-        return first_candidate_bytes, "web_search"
-
-    logger.info("Ни одного фото для «%s» не нашлось ни в одном источнике - рисую ИИ-иллюстрацию взамен", dish_name)
-    return _generate_ai_photo(query), "ai_generated"
+    """Старый интерфейс (bytes, source) - для остального кода проекта."""
+    result = find_dish_photo(dish_name, cuisine, category, ingredients)
+    return result.image_bytes, result.source or "ai_generated"
 
 
 def save_photo_bytes(recipe_id: int, image_bytes: bytes) -> str:
-    """
-    Сохраняет уже полученные (скачанные и, для настоящих фото, проверенные)
-    байты картинки в PHOTOS_DIR как recipe_{id}.jpg.
-    """
     from backend.config import PHOTOS_DIR  # локальный импорт - избегаем цикла
 
     filename = f"recipe_{recipe_id}.jpg"
