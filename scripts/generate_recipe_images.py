@@ -22,6 +22,14 @@
 
 --no-ai - не рисовать ИИ-иллюстрацию, даже если не нашлось ни одного фото.
 
+--ids "18,29"       обработать только рецепты с этими id (например, повторить
+                    поиск для тех, чьё фото не подошло)
+
+Применение одобренного предпросмотра (без повторного поиска - в базу попадают
+ровно те картинки и авторы, что в папке предпросмотра; см. manifest.json):
+    python -m scripts.generate_recipe_images --apply-preview /tmp/photo_preview4 \
+        --skip-ids "121,264"
+
 Пример: пробный прогон с просмотром результата
     python -m scripts.generate_recipe_images --replace-all --category "Напитки,Соусы" \\
         --dry-run --allow-unverified --preview-dir /tmp/photo_preview
@@ -31,6 +39,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import html
+import json
 import logging
 import re
 from pathlib import Path
@@ -107,6 +116,61 @@ span{{color:#555}}i{{color:#888;font-size:12px}}em{{color:#c33;font-size:12px}}
     (preview_dir / "index.html").write_text(page, encoding="utf-8")
 
 
+def _credit_dict(credit) -> dict | None:
+    if credit is None:
+        return None
+    return {
+        "provider": credit.provider, "author": credit.author, "author_url": credit.author_url,
+        "page_url": credit.page_url, "license": credit.license,
+    }
+
+
+async def _save_to_db(recipe_id: int, filename: str, source: str | None, credit: dict | None) -> None:
+    credit = credit or {}
+    async with async_session() as session:
+        db_recipe = await session.get(Recipe, recipe_id)
+        if db_recipe is None:
+            logger.warning("  рецепт id=%d не найден в базе - пропускаю", recipe_id)
+            return
+        db_recipe.photo_path = filename
+        db_recipe.photo_source = source
+        db_recipe.photo_credit_provider = credit.get("provider")
+        db_recipe.photo_credit_author = credit.get("author")
+        db_recipe.photo_credit_author_url = credit.get("author_url")
+        db_recipe.photo_credit_page_url = credit.get("page_url")
+        db_recipe.photo_credit_license = credit.get("license")
+        await session.commit()
+
+
+async def apply_preview(preview_dir: Path, skip_ids: set[int]) -> None:
+    """Записывает в базу картинки из папки предпросмотра по её manifest.json."""
+    await init_db()
+    await ensure_photo_credit_columns()
+    manifest_path = preview_dir / "manifest.json"
+    if not manifest_path.exists():
+        logger.error("Нет %s - этот предпросмотр сделан старой версией скрипта, "
+                     "сделайте новый --dry-run --preview-dir", manifest_path)
+        return
+    entries = json.loads(manifest_path.read_text(encoding="utf-8"))
+    applied, skipped, missing = 0, 0, 0
+    for entry in entries:
+        recipe_id = entry["id"]
+        if recipe_id in skip_ids or not entry.get("file"):
+            skipped += 1
+            continue
+        image_path = preview_dir / entry["file"]
+        if not image_path.exists():
+            logger.warning("  #%d: файла %s нет - пропускаю", recipe_id, entry["file"])
+            missing += 1
+            continue
+        filename = await asyncio.to_thread(save_photo_bytes, recipe_id, image_path.read_bytes())
+        await _save_to_db(recipe_id, filename, entry.get("source"), entry.get("credit"))
+        applied += 1
+        logger.info("  #%d %s -> %s", recipe_id, entry.get("name", ""), filename)
+    logger.info("Применено %d, пропущено %d, файлов не найдено %d (из %d в manifest.json).",
+                applied, skipped, missing, len(entries))
+
+
 async def main(
     replace_all: bool,
     limit: int | None = None,
@@ -115,6 +179,7 @@ async def main(
     allow_unverified: bool | None = None,
     allow_ai: bool = True,
     preview_dir: Path | None = None,
+    only_ids: set[int] | None = None,
 ) -> None:
     await init_db()
     await ensure_photo_credit_columns()
@@ -129,6 +194,9 @@ async def main(
             r for r in recipes
             if r.category and any(needle in r.category.name.lower() for needle in needles)
         ]
+
+    if only_ids:
+        recipes = [r for r in recipes if r.id in only_ids]
 
     if not recipes:
         logger.info("Обрабатывать нечего - подходящих рецептов не нашлось (с учётом фильтров).")
@@ -149,6 +217,7 @@ async def main(
     needs_review: list[str] = []
     used_hashes: set[str] = set()
     preview_rows: list[dict] = []
+    manifest: list[dict] = []
 
     for i, recipe in enumerate(recipes, start=1):
         logger.info("[%d/%d] %s", i, len(recipes), recipe.name)
@@ -184,18 +253,7 @@ async def main(
                             status, result.provider, len(result.image_bytes))
             else:
                 filename = await asyncio.to_thread(save_photo_bytes, recipe.id, result.image_bytes)
-                async with async_session() as session:
-                    db_recipe = await session.get(Recipe, recipe.id)
-                    if db_recipe is not None:
-                        db_recipe.photo_path = filename
-                        db_recipe.photo_source = result.source
-                        credit = result.credit
-                        db_recipe.photo_credit_provider = credit.provider if credit else None
-                        db_recipe.photo_credit_author = credit.author if credit else None
-                        db_recipe.photo_credit_author_url = credit.author_url if credit else None
-                        db_recipe.photo_credit_page_url = credit.page_url if credit else None
-                        db_recipe.photo_credit_license = credit.license if credit else None
-                        await session.commit()
+                await _save_to_db(recipe.id, filename, result.source, _credit_dict(result.credit))
                 logger.info("  сохранено (%s, %s): %s", status, result.provider, filename)
 
         preview_rows.append({
@@ -204,9 +262,17 @@ async def main(
             "author": (result.credit.author or "") if result.credit else "",
             "file": preview_file,
         })
+        manifest.append({
+            "id": recipe.id, "name": recipe.name, "file": preview_file, "status": status,
+            "source": result.source, "credit": _credit_dict(result.credit),
+        })
         if preview_dir is not None:
-            # Пишем index.html после каждого рецепта - можно смотреть, не дожидаясь конца.
+            # Пишем index.html и manifest.json после каждого рецепта - можно
+            # смотреть, не дожидаясь конца (а при обрыве применить то, что есть).
             _write_preview_index(preview_dir, preview_rows)
+            (preview_dir / "manifest.json").write_text(
+                json.dumps(manifest, ensure_ascii=False, indent=1), encoding="utf-8"
+            )
 
         if i < len(recipes):
             await asyncio.sleep(REQUEST_DELAY_SECONDS)
@@ -237,9 +303,22 @@ if __name__ == "__main__":
     parser.add_argument("--no-ai", action="store_true", help="Не рисовать ИИ-иллюстрацию вообще")
     parser.add_argument("--preview-dir", type=Path, default=None,
                         help="Сложить найденные картинки и index.html в эту папку")
+    parser.add_argument("--ids", type=str, default=None,
+                        help='Обработать только рецепты с этими id, например "121,264"')
+    parser.add_argument("--apply-preview", type=Path, default=None,
+                        help="Записать в базу картинки из папки предпросмотра (по manifest.json), без поиска")
+    parser.add_argument("--skip-ids", type=str, default=None,
+                        help='С --apply-preview: не применять эти id, например "121,264"')
     args = parser.parse_args()
-    categories = args.category.split(",") if args.category else None
-    asyncio.run(main(
-        args.replace_all, args.limit, args.dry_run, categories,
-        args.allow_unverified, not args.no_ai, args.preview_dir,
-    ))
+
+    def _parse_ids(value: str | None) -> set[int]:
+        return {int(x) for x in value.replace(" ", "").split(",") if x} if value else set()
+
+    if args.apply_preview is not None:
+        asyncio.run(apply_preview(args.apply_preview, _parse_ids(args.skip_ids)))
+    else:
+        categories = args.category.split(",") if args.category else None
+        asyncio.run(main(
+            args.replace_all, args.limit, args.dry_run, categories,
+            args.allow_unverified, not args.no_ai, args.preview_dir, _parse_ids(args.ids) or None,
+        ))
