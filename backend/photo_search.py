@@ -3,9 +3,18 @@
 блюда в свободных источниках и проверяем её через Gemini Vision.
 
 Реальное фото ищется по очереди в:
-1. Unsplash (нужен UNSPLASH_ACCESS_KEY, иначе источник пропускается).
-2. Pexels (нужен PEXELS_API_KEY, иначе источник пропускается).
-3. Openverse (без ключа).
+1. Pexels (нужен PEXELS_API_KEY, иначе источник пропускается).
+2. Openverse (без ключа).
+
+Unsplash из поиска убран: правила его API требуют показывать фото по ссылке
+Unsplash (hotlink), а мы храним файлы у себя; к тому же images.unsplash.com
+нестабильно открывается из РФ. Функция _search_unsplash оставлена в файле,
+но в _PROVIDERS не входит.
+
+Атрибуция. Для каждой картинки сохраняются автор, ссылка на автора,
+страница фото и лицензия (PhotoResult.credit) - они показываются под фото
+в Mini App. Для Openverse это обязательно (большинство фото под CC BY),
+для Pexels - рекомендуется правилами.
 
 (Google Custom Search закрыт для новых клиентов - _search_google_images
 оставлена в файле, но в поиске не используется.)
@@ -209,6 +218,21 @@ def _note_gemini_result(status: int | None) -> None:
 
 # --- Поиск кандидатов -------------------------------------------------------
 
+@dataclass
+class PhotoCredit:
+    provider: str                     # pexels / openverse
+    author: str | None = None
+    author_url: str | None = None
+    page_url: str | None = None       # страница фото у источника
+    license: str | None = None        # например "CC BY 2.0"; для Pexels None
+
+
+@dataclass
+class Candidate:
+    image_url: str
+    credit: PhotoCredit
+
+
 def _search_google_images(query: str) -> list[str]:
     if not (GOOGLE_SEARCH_API_KEY and GOOGLE_SEARCH_CX):
         return []
@@ -255,7 +279,7 @@ def _search_unsplash(query: str) -> list[str]:
         return []
 
 
-def _search_pexels(query: str) -> list[str]:
+def _search_pexels(query: str) -> list[Candidate]:
     if not PEXELS_API_KEY:
         return []
     headers = {"Authorization": PEXELS_API_KEY}
@@ -264,12 +288,23 @@ def _search_pexels(query: str) -> list[str]:
         response = _http("GET", "https://api.pexels.com/v1/search",
                          f"Поиск фото «{query}» через Pexels", headers=headers, params=params)
         photos = response.json().get("photos", [])
-        return [p["src"]["large"] for p in photos if p.get("src", {}).get("large")]
+        return [
+            Candidate(
+                image_url=p["src"]["large"],
+                credit=PhotoCredit(
+                    provider="pexels",
+                    author=p.get("photographer") or None,
+                    author_url=p.get("photographer_url") or None,
+                    page_url=p.get("url") or None,
+                ),
+            )
+            for p in photos if p.get("src", {}).get("large")
+        ]
     except Exception:
         return []
 
 
-def _search_openverse(query: str) -> list[str]:
+def _search_openverse(query: str) -> list[Candidate]:
     params = {
         "q": query, "page_size": CANDIDATES_PER_SOURCE, "license_type": "commercial",
         "category": "photograph", "mature": "false",
@@ -277,13 +312,35 @@ def _search_openverse(query: str) -> list[str]:
     try:
         response = _http("GET", "https://api.openverse.org/v1/images/",
                          f"Поиск фото «{query}» через Openverse", params=params)
-        return [r["url"] for r in response.json().get("results", []) if r.get("url")]
+        results = response.json().get("results", [])
+        candidates = []
+        for r in results:
+            if not r.get("url"):
+                continue
+            license_code = (r.get("license") or "").upper()
+            version = r.get("license_version") or ""
+            if license_code in ("CC0", "PDM"):
+                license_label = "CC0" if license_code == "CC0" else "Public Domain"
+            elif license_code:
+                license_label = f"CC {license_code} {version}".strip()
+            else:
+                license_label = None
+            candidates.append(Candidate(
+                image_url=r["url"],
+                credit=PhotoCredit(
+                    provider="openverse",
+                    author=r.get("creator") or None,
+                    author_url=r.get("creator_url") or None,
+                    page_url=r.get("foreign_landing_url") or None,
+                    license=license_label,
+                ),
+            ))
+        return candidates
     except Exception:
         return []
 
 
 _PROVIDERS = (
-    ("unsplash", _search_unsplash),
     ("pexels", _search_pexels),
     ("openverse", _search_openverse),
 )
@@ -326,7 +383,7 @@ def _translate_query_for_search(dish_name: str, category: str | None, is_drink: 
     prompt = (
         f"Название {subject}: «{dish_name}»{category_part}.\n\n"
         f"Переведи название на английский и сделай из него запрос для поиска "
-        f"ФОТОГРАФИИ в стоковом фотобанке (Unsplash/Pexels) - 2-5 английских "
+        f"ФОТОГРАФИИ в стоковом фотобанке (Pexels) - 2-5 английских "
         f"слов, по которым найдётся именно это {'напиток' if is_drink else 'блюдо'}. "
         f"Правила: не добавляй страну или национальность кухни (Russian, Italian, "
         f"Chinese и т.п.), если она не входит в само общепринятое название "
@@ -432,6 +489,7 @@ class PhotoResult:
     verified: bool = False          # подтверждено Gemini Vision
     query: str = ""
     reason: str = ""                # почему ничего не взято (для лога/отчёта)
+    credit: PhotoCredit | None = None  # автор/лицензия; None для ИИ-иллюстрации
 
 
 def find_dish_photo(
@@ -455,7 +513,7 @@ def find_dish_photo(
     query = _translate_query_for_search(dish_name, category, is_drink)
     logger.info("  запрос для поиска: «%s»", query)
 
-    unverified: tuple[bytes, str] | None = None
+    unverified: tuple[bytes, str, PhotoCredit] | None = None
     any_candidate = False
     rejected = 0
     duplicates = 0
@@ -464,8 +522,8 @@ def find_dish_photo(
     for provider, search_fn in _PROVIDERS:
         if vision_down and unverified is not None:
             break
-        for candidate_url in search_fn(query):
-            image_bytes = _fetch_image_bytes(candidate_url)
+        for candidate in search_fn(query):
+            image_bytes = _fetch_image_bytes(candidate.image_url)
             if image_bytes is None:
                 continue
             mime = _image_mime(image_bytes)
@@ -481,7 +539,7 @@ def find_dish_photo(
                 image_bytes, mime, dish_name, cuisine, is_drink, ingredients
             )
             if verdict is True:
-                return PhotoResult(image_bytes, "web_search", provider, True, query)
+                return PhotoResult(image_bytes, "web_search", provider, True, query, credit=candidate.credit)
             if verdict is False:
                 rejected += 1
                 logger.info("  кандидат из %s отклонён проверкой Gemini", provider)
@@ -489,14 +547,14 @@ def find_dish_photo(
             # Проверить не удалось - дальше проверять других бессмысленно.
             vision_down = True
             if unverified is None:
-                unverified = (image_bytes, provider)
+                unverified = (image_bytes, provider, candidate.credit)
             break
 
     if unverified is not None:
-        image_bytes, provider = unverified
+        image_bytes, provider, credit = unverified
         if allow_unverified:
             logger.info("  фото из %s не подтверждено (Gemini недоступен) - беру как есть", provider)
-            return PhotoResult(image_bytes, "web_search", provider, False, query)
+            return PhotoResult(image_bytes, "web_search", provider, False, query, credit=credit)
         logger.info("  фото из %s найдено, но не подтверждено - пропускаю, текущее фото остаётся", provider)
         return PhotoResult(None, None, provider, False, query, reason="не подтверждено")
 
