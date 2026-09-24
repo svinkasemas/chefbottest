@@ -40,6 +40,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.database.db import async_session, init_db
 from backend.database.models import Recipe, RecipeIngredient
+from backend.database.photo_credit_migration import ensure_photo_credit_columns
 from backend.photo_search import find_dish_photo, photo_hash, save_photo_bytes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -86,6 +87,7 @@ def _write_preview_index(preview_dir: Path, rows: list[dict]) -> None:
             f'<span>{html.escape(row["category"] or "")} · {row["status"]}'
             f'{" · " + row["provider"] if row["provider"] else ""}</span>'
             f'<i>{html.escape(row["query"])}</i>'
+            f'{"<small>Фото: " + html.escape(row["author"]) + "</small>" if row.get("author") else ""}'
             f'{"<em>" + html.escape(row["reason"]) + "</em>" if row["reason"] else ""}</div>'
         )
     page = f"""<!doctype html><meta charset="utf-8"><title>Предпросмотр фото рецептов</title>
@@ -115,6 +117,7 @@ async def main(
     preview_dir: Path | None = None,
 ) -> None:
     await init_db()
+    await ensure_photo_credit_columns()
     if allow_unverified is None:
         allow_unverified = not replace_all
 
@@ -186,12 +189,19 @@ async def main(
                     if db_recipe is not None:
                         db_recipe.photo_path = filename
                         db_recipe.photo_source = result.source
+                        credit = result.credit
+                        db_recipe.photo_credit_provider = credit.provider if credit else None
+                        db_recipe.photo_credit_author = credit.author if credit else None
+                        db_recipe.photo_credit_author_url = credit.author_url if credit else None
+                        db_recipe.photo_credit_page_url = credit.page_url if credit else None
+                        db_recipe.photo_credit_license = credit.license if credit else None
                         await session.commit()
                 logger.info("  сохранено (%s, %s): %s", status, result.provider, filename)
 
         preview_rows.append({
             "id": recipe.id, "name": recipe.name, "category": category_name, "status": status,
             "provider": result.provider or "", "query": result.query, "reason": result.reason,
+            "author": (result.credit.author or "") if result.credit else "",
             "file": preview_file,
         })
         if preview_dir is not None:
