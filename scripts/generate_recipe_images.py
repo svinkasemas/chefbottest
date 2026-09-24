@@ -1,63 +1,46 @@
 """
-Ежедневный подбор ФОТОГРАФИЙ для рецептов без фото.
-
-Как это работает (см. подробный docstring в backend/photo_search.py):
-1. Ищутся рецепты без фото (Recipe.photo_path IS NULL) - обычный ежедневный
-   режим - или ВСЕ рецепты (кроме тех, что помечены как реальное фото со
-   страницы-источника), если запущено с --replace-all - для разовой замены
-   уже существующих картинок.
-2. Для каждого сначала ищется НАСТОЯЩАЯ фотография блюда в Google Custom
-   Search (если заданы GOOGLE_SEARCH_API_KEY/GOOGLE_SEARCH_CX), Pexels (если
-   задан PEXELS_API_KEY) и/или Openverse (без ключа); каждый найденный
-   кандидат проверяется через Gemini Vision - действительно ли на нём
-   изображено именно это блюдо (иначе поиск по словам иногда подсовывает
-   случайное фото - сырники вместо куриных сердечек и т.п.).
-3. Если подтверждённого настоящего фото не нашлось - рисуем иллюстрацию
-   через ИИ (Pollinations.ai) как запасной вариант, чтобы у рецепта в любом
-   случае была подходящая по смыслу картинка.
-4. Путь сохранённого файла прописывается в Recipe.photo_path,
-   Recipe.photo_source = "web_search" (настоящее, подтверждённое фото) или
-   "ai_generated" (нарисовано, поскольку ничего подходящего не нашлось).
+Подбор ФОТОГРАФИЙ для рецептов (см. подробности в backend/photo_search.py).
 
 Обычный ежедневный запуск (только рецепты без фото):
     python -m scripts.generate_recipe_images
 
-Разовая замена ВСЕХ фото, включая уже существующие/нарисованные ИИ
-(рецепты с photo_source="source_page" - настоящее фото с сайта-источника,
-добавленное вручную через админскую команду /import в bot.py - не трогаются):
+Разовая замена всех фото (кроме photo_source="source_page"):
     python -m scripts.generate_recipe_images --replace-all
 
-Пробный запуск на небольшом числе рецептов (например, после добавления
-нового источника фото - проверить результат, прежде чем гонять
---replace-all по всей базе; рецепты сверх лимита в этот раз не трогаются,
-их текущие фото остаются как есть) БЕЗ сохранения (--dry-run - ничего не
-пишет на диск/в базу, только логирует найденный источник):
-    python -m scripts.generate_recipe_images --replace-all --limit 5 --dry-run
+Фильтры и пробные запуски:
+    --limit N           только первые N рецептов
+    --category "A,B"    только категории, чьё название содержит подстроку
+    --dry-run           ничего не сохранять в базу и в папку фото
+    --preview-dir DIR   сложить найденные картинки в DIR + index.html,
+                        чтобы просмотреть их глазами
 
-Прицельный пробный запуск по конкретным категориям (--category, через
-запятую, подстрока без учёта регистра) - например, только напитки и
-соусы/закуски, без сохранения:
-    python -m scripts.generate_recipe_images --replace-all --category "Напитки,Соусы" --dry-run
+Неподтверждённые фото (Gemini Vision недоступен, проверить нечем):
+- в ежедневном режиме берутся (у рецепта нет фото совсем - лучше так);
+- в режиме --replace-all по умолчанию НЕ берутся: у рецепта уже есть фото,
+  менять его на непроверенное смысла нет. Включить: --allow-unverified.
+Отклонённые проверкой фото не берутся никогда.
 
-Пауза между запросами - вежливость к бесплатным API (Pexels/Openverse/
-Gemini), чтобы не упереться в рейт-лимит при обработке сразу многих
-рецептов. Учтите: с проверкой через Gemini Vision на рецепт теперь уходит
-заметно больше запросов (до нескольких кандидатов на источник), чем раньше -
-это медленнее, но не подставляет случайные фото.
+--no-ai - не рисовать ИИ-иллюстрацию, даже если не нашлось ни одного фото.
+
+Пример: пробный прогон с просмотром результата
+    python -m scripts.generate_recipe_images --replace-all --category "Напитки,Соусы" \\
+        --dry-run --allow-unverified --preview-dir /tmp/photo_preview
 """
 from __future__ import annotations
 
 import argparse
 import asyncio
+import html
 import logging
-import time
+import re
+from pathlib import Path
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from backend.database.db import async_session, init_db
 from backend.database.models import Recipe, RecipeIngredient
-from backend.photo_search import get_dish_photo, save_photo_bytes
+from backend.photo_search import find_dish_photo, photo_hash, save_photo_bytes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("generate_recipe_images")
@@ -67,15 +50,6 @@ REQUEST_DELAY_SECONDS = 3
 
 async def _recipes_to_process(replace_all: bool) -> list[Recipe]:
     async with async_session() as session:
-        # selectinload(Recipe.category) - категория нужна для поиска фото
-        # (см. process_recipe/get_dish_photo: у напитков поиск должен
-        # просить фото напитка, а не еды). selectinload(...ingredient_links...
-        # .ingredient) - список ингредиентов передаётся в проверку через
-        # Gemini Vision, чтобы отклонять фото, где на первом плане что-то,
-        # чего нет в составе рецепта (см. баг-репорт: фото "суккоташа" с
-        # преобладающим зелёным горошком для рецепта без горошка). Всё
-        # подгружаем сразу, чтобы обращение к этим полям ниже не требовало
-        # отдельного запроса к уже закрытой сессии.
         query = (
             select(Recipe)
             .where(Recipe.is_active.is_(True))
@@ -85,14 +59,7 @@ async def _recipes_to_process(replace_all: bool) -> list[Recipe]:
             )
         )
         if replace_all:
-            # Разовая замена: рецепты без фото ИЛИ с фото неизвестного
-            # происхождения (старое, ещё не помеченное, либо нарисованное
-            # ИИ раньше/сейчас - вдруг теперь найдётся настоящее фото).
-            # "source_page" - настоящее фото с сайта-источника, добавленное
-            # вручную - никогда не трогаем.
-            # is_distinct_from - NULL-безопасное "не равно": обычное != "source_page"
-            # в SQL пропускает строки с photo_source IS NULL (NULL != x даёт NULL,
-            # не TRUE), а такие старые рецепты как раз и нужно подхватывать.
+            # is_distinct_from - NULL-безопасное «не равно» (см. историю файла).
             query = query.where(
                 or_(Recipe.photo_path.is_(None), Recipe.photo_source.is_distinct_from("source_page"))
             )
@@ -102,58 +69,58 @@ async def _recipes_to_process(replace_all: bool) -> list[Recipe]:
         return list(result.scalars().all())
 
 
-async def process_recipe(
-    recipe_id: int,
-    name: str,
-    cuisine: str | None,
-    category: str | None,
-    ingredients: list[str],
-    dry_run: bool = False,
-) -> str | None:
-    """
-    Возвращает "web_search"/"ai_generated" (что удалось бы сохранить) или
-    None, если не получилось вообще ничего.
+def _safe_name(name: str) -> str:
+    return re.sub(r"[^\w\-]+", "_", name, flags=re.UNICODE).strip("_")[:60]
 
-    dry_run - только найти и залогировать результат (какой источник, сколько
-    байт), НИЧЕГО не сохраняя ни на диск, ни в базу - для пробного запуска,
-    не трогающего уже существующие фото стабильных рецептов (см. --dry-run).
-    """
-    image_bytes, source = await asyncio.to_thread(get_dish_photo, name, cuisine, category, ingredients)
-    if image_bytes is None:
-        logger.warning("  не удалось получить фото (ни найти, ни нарисовать): «%s»", name)
-        return None
 
-    if dry_run:
-        logger.info("  [dry-run, не сохранено] источник: %s, размер: %d байт", source, len(image_bytes))
-        return source
-
-    filename = await asyncio.to_thread(save_photo_bytes, recipe_id, image_bytes)
-
-    async with async_session() as session:
-        db_recipe = await session.get(Recipe, recipe_id)
-        if db_recipe is not None:
-            db_recipe.photo_path = filename
-            db_recipe.photo_source = source
-            await session.commit()
-
-    logger.info("  сохранено (%s): %s", source, filename)
-    return source
+def _write_preview_index(preview_dir: Path, rows: list[dict]) -> None:
+    cards = []
+    for row in rows:
+        img = (
+            f'<img src="{html.escape(row["file"])}" loading="lazy">'
+            if row["file"] else '<div class="empty">нет фото</div>'
+        )
+        cards.append(
+            f'<div class="card {row["status"]}">{img}'
+            f'<b>#{row["id"]} {html.escape(row["name"])}</b>'
+            f'<span>{html.escape(row["category"] or "")} · {row["status"]}'
+            f'{" · " + row["provider"] if row["provider"] else ""}</span>'
+            f'<i>{html.escape(row["query"])}</i>'
+            f'{"<em>" + html.escape(row["reason"]) + "</em>" if row["reason"] else ""}</div>'
+        )
+    page = f"""<!doctype html><meta charset="utf-8"><title>Предпросмотр фото рецептов</title>
+<style>
+body{{font:14px system-ui,sans-serif;margin:16px;background:#f4f4f4}}
+.grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}}
+.card{{background:#fff;border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:4px;border-top:4px solid #999}}
+.card.verified{{border-color:#2a9d4a}}.card.unverified{{border-color:#e0a100}}
+.card.ai{{border-color:#7b4ae0}}.card.skipped{{border-color:#c33}}
+img,.empty{{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:4px;background:#ddd}}
+.empty{{display:flex;align-items:center;justify-content:center;color:#666}}
+span{{color:#555}}i{{color:#888;font-size:12px}}em{{color:#c33;font-size:12px}}
+</style>
+<h2>Предпросмотр: {len(rows)} рецептов</h2>
+<p>Зелёный - подтверждено, жёлтый - не подтверждено, фиолетовый - ИИ, красный - пропущено.</p>
+<div class="grid">{''.join(cards)}</div>"""
+    (preview_dir / "index.html").write_text(page, encoding="utf-8")
 
 
 async def main(
-    replace_all: bool, limit: int | None = None, dry_run: bool = False, categories: list[str] | None = None
+    replace_all: bool,
+    limit: int | None = None,
+    dry_run: bool = False,
+    categories: list[str] | None = None,
+    allow_unverified: bool | None = None,
+    allow_ai: bool = True,
+    preview_dir: Path | None = None,
 ) -> None:
     await init_db()
+    if allow_unverified is None:
+        allow_unverified = not replace_all
 
     recipes = await _recipes_to_process(replace_all)
 
     if categories:
-        # --category - оставить только рецепты из категорий, чьё название
-        # содержит одну из переданных подстрок (без учёта регистра). Удобно
-        # для прицельного пробного прогона по конкретным категориям
-        # (например "Напитки,Соусы") вместо первых N рецептов подряд из
-        # всей базы, которые могут все оказаться из одной и той же
-        # категории (супы и т.п.) и ничего не сказать про остальные.
         needles = [c.strip().lower() for c in categories if c.strip()]
         recipes = [
             r for r in recipes
@@ -165,59 +132,104 @@ async def main(
         return
 
     if limit is not None:
-        # --limit - для пробного запуска на небольшом числе рецептов (например,
-        # после добавления нового источника фото), чтобы проверить результат
-        # перед тем как гонять --replace-all по всей базе. Уже существующие
-        # фото у необработанных в этот раз рецептов не трогаются - они как
-        # были, так и останутся (обработаются в следующий обычный/replace-all
-        # запуск).
         recipes = recipes[:limit]
 
+    if preview_dir is not None:
+        preview_dir.mkdir(parents=True, exist_ok=True)
+
     logger.info(
-        "Рецептов для обработки: %d (replace_all=%s, limit=%s, dry_run=%s)", len(recipes), replace_all, limit, dry_run
+        "Рецептов для обработки: %d (replace_all=%s, limit=%s, dry_run=%s, allow_unverified=%s, allow_ai=%s)",
+        len(recipes), replace_all, limit, dry_run, allow_unverified, allow_ai,
     )
 
-    found_real = 0
-    found_ai = 0
+    counts = {"verified": 0, "unverified": 0, "ai": 0, "skipped": 0}
+    needs_review: list[str] = []
+    used_hashes: set[str] = set()
+    preview_rows: list[dict] = []
+
     for i, recipe in enumerate(recipes, start=1):
         logger.info("[%d/%d] %s", i, len(recipes), recipe.name)
         category_name = recipe.category.name if recipe.category else None
         ingredient_names = [link.ingredient.name for link in recipe.ingredient_links if link.ingredient]
-        source = await process_recipe(
-            recipe.id, recipe.name, recipe.cuisine, category_name, ingredient_names, dry_run
+
+        result = await asyncio.to_thread(
+            find_dish_photo, recipe.name, recipe.cuisine, category_name, ingredient_names,
+            allow_unverified=allow_unverified, allow_ai=allow_ai, exclude_hashes=used_hashes,
         )
-        if source == "web_search":
-            found_real += 1
-        elif source == "ai_generated":
-            found_ai += 1
+
+        if result.image_bytes is None:
+            status = "skipped"
+            needs_review.append(f"#{recipe.id} {recipe.name} - {result.reason or 'ничего не взято'}")
+        elif result.source == "ai_generated":
+            status = "ai"
+        elif result.verified:
+            status = "verified"
+        else:
+            status = "unverified"
+            needs_review.append(f"#{recipe.id} {recipe.name} - не подтверждено ({result.provider})")
+        counts[status] += 1
+
+        preview_file = ""
+        if result.image_bytes is not None:
+            used_hashes.add(photo_hash(result.image_bytes))
+            if preview_dir is not None:
+                preview_file = f"{recipe.id}_{status}_{_safe_name(recipe.name)}.jpg"
+                (preview_dir / preview_file).write_bytes(result.image_bytes)
+
+            if dry_run:
+                logger.info("  [dry-run, не сохранено] %s, %s, %d байт",
+                            status, result.provider, len(result.image_bytes))
+            else:
+                filename = await asyncio.to_thread(save_photo_bytes, recipe.id, result.image_bytes)
+                async with async_session() as session:
+                    db_recipe = await session.get(Recipe, recipe.id)
+                    if db_recipe is not None:
+                        db_recipe.photo_path = filename
+                        db_recipe.photo_source = result.source
+                        await session.commit()
+                logger.info("  сохранено (%s, %s): %s", status, result.provider, filename)
+
+        preview_rows.append({
+            "id": recipe.id, "name": recipe.name, "category": category_name, "status": status,
+            "provider": result.provider or "", "query": result.query, "reason": result.reason,
+            "file": preview_file,
+        })
+        if preview_dir is not None:
+            # Пишем index.html после каждого рецепта - можно смотреть, не дожидаясь конца.
+            _write_preview_index(preview_dir, preview_rows)
+
         if i < len(recipes):
-            time.sleep(REQUEST_DELAY_SECONDS)
+            await asyncio.sleep(REQUEST_DELAY_SECONDS)
 
     logger.info(
-        "Готово: настоящих фото найдено %d, нарисовано ИИ %d, не удалось получить %d (из %d всего).",
-        found_real, found_ai, len(recipes) - found_real - found_ai, len(recipes),
+        "Готово (из %d): подтверждено %d, не подтверждено %d, ИИ %d, пропущено %d.",
+        len(recipes), counts["verified"], counts["unverified"], counts["ai"], counts["skipped"],
     )
+    if needs_review:
+        logger.info("Стоит проверить вручную (scripts/set_manual_photos.py):\n  %s", "\n  ".join(needs_review))
+    if preview_dir is not None:
+        logger.info("Предпросмотр: %s", preview_dir / "index.html")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument(
-        "--replace-all", action="store_true",
-        help="Заменить ВСЕ фото, включая уже существующие (в т.ч. нарисованные ИИ раньше)",
-    )
-    parser.add_argument(
-        "--limit", type=int, default=None,
-        help="Обработать только первые N рецептов из списка (для пробного запуска, не трогает остальные)",
-    )
-    parser.add_argument(
-        "--dry-run", action="store_true",
-        help="Ничего не сохранять (ни на диск, ни в базу) - только показать в логе, что бы нашлось",
-    )
-    parser.add_argument(
-        "--category", type=str, default=None,
-        help='Обработать только рецепты из категорий, чьё название содержит одну из этих подстрок '
-             '(через запятую, без учёта регистра), например: --category "Напитки,Соусы"',
-    )
+    parser.add_argument("--replace-all", action="store_true",
+                        help="Заменить все фото, кроме photo_source=source_page")
+    parser.add_argument("--limit", type=int, default=None, help="Обработать только первые N рецептов")
+    parser.add_argument("--dry-run", action="store_true", help="Ничего не сохранять в базу и в папку фото")
+    parser.add_argument("--category", type=str, default=None,
+                        help='Только категории, чьё название содержит подстроку, например "Напитки,Соусы"')
+    unverified = parser.add_mutually_exclusive_group()
+    unverified.add_argument("--allow-unverified", dest="allow_unverified", action="store_true", default=None,
+                            help="Брать фото, которые не удалось проверить через Gemini")
+    unverified.add_argument("--no-unverified", dest="allow_unverified", action="store_false",
+                            help="Не брать непроверенные фото даже в ежедневном режиме")
+    parser.add_argument("--no-ai", action="store_true", help="Не рисовать ИИ-иллюстрацию вообще")
+    parser.add_argument("--preview-dir", type=Path, default=None,
+                        help="Сложить найденные картинки и index.html в эту папку")
     args = parser.parse_args()
     categories = args.category.split(",") if args.category else None
-    asyncio.run(main(args.replace_all, args.limit, args.dry_run, categories))
+    asyncio.run(main(
+        args.replace_all, args.limit, args.dry_run, categories,
+        args.allow_unverified, not args.no_ai, args.preview_dir,
+    ))
