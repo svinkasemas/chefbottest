@@ -52,6 +52,8 @@ from __future__ import annotations
 
 import base64
 import logging
+import threading
+import time
 import urllib.parse
 
 import requests
@@ -72,6 +74,27 @@ REQUEST_TIMEOUT_SECONDS = 15
 # Сколько кандидатов запрашивать у каждого источника - чтобы было из чего
 # выбирать, если первый результат не подтвердится проверкой релевантности.
 CANDIDATES_PER_SOURCE = 5
+
+# Пауза между запросами к Gemini (и переводом названия, и проверкой фото -
+# оба расходуют один и тот же лимит ключа) - без неё скрипт легко успевает
+# сделать несколько запросов подряд за секунды, что при пакетной обработке
+# рецептов упирается в бесплатный лимит Gemini почти на каждом вызове (см.
+# баг-репорт: массовые 429 -> проверка фото фактически не работает ->
+# случайные фото с Openverse (кот на книгах, нож и т.п.) проходят
+# неподтверждёнными). 4.5 сек между вызовами - около 13 запросов в минуту,
+# с запасом под типичный бесплатный лимит ~15 RPM.
+_GEMINI_MIN_INTERVAL_SECONDS = 4.5
+_gemini_rate_lock = threading.Lock()
+_gemini_last_call_at = 0.0
+
+
+def _throttle_gemini() -> None:
+    global _gemini_last_call_at
+    with _gemini_rate_lock:
+        wait = _gemini_last_call_at + _GEMINI_MIN_INTERVAL_SECONDS - time.monotonic()
+        if wait > 0:
+            time.sleep(wait)
+        _gemini_last_call_at = time.monotonic()
 
 
 def _proxies(use_proxy: bool) -> dict | None:
@@ -202,6 +225,9 @@ def _translate_query_for_search(dish_name: str, cuisine: str | None, is_drink: b
         f'{{"query": "english search phrase"}}'
     )
     try:
+        # _call_with_fallback пробует gemini первым - придерживаем общий
+        # лимит вместе с _call_gemini_vision (см. _throttle_gemini).
+        _throttle_gemini()
         data = _call_with_fallback(prompt, error_subject=f"перевод названия «{dish_name}» для поиска фото")
         query = str(data.get("query", "")).strip()
         if query:
@@ -215,6 +241,7 @@ def _translate_query_for_search(dish_name: str, cuisine: str | None, is_drink: b
 def _call_gemini_vision(prompt: str, image_bytes: bytes, use_proxy: bool) -> str:
     if not GEMINI_API_KEY:
         raise RuntimeError("GEMINI_API_KEY не задан")
+    _throttle_gemini()
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent"
     headers = {"X-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"}
     payload = {
