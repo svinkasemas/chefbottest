@@ -26,8 +26,10 @@ from backend.auth import TelegramUser, get_current_user
 from backend.config import BOT_USERNAME, CORS_ORIGINS, PHOTOS_DIR, WEBAPP_DIR
 from backend.database import crud
 from backend.database.db import get_db, init_db
+from backend.database.photo_credit_migration import ensure_photo_credit_columns
 from backend.database.models import Category
 from backend.schemas import (
+    PhotoCreditOut,
     AddCustomShoppingItemIn,
     AddToShoppingListIn,
     CategoryOut,
@@ -72,6 +74,7 @@ COMMON_INGREDIENTS = [
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await ensure_photo_credit_columns()
     yield
 
 
@@ -100,6 +103,19 @@ async def no_cache_for_index_html(request: Request, call_next):
     if request.url.path == "/":
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     return response
+
+
+def photo_credit_for(recipe) -> PhotoCreditOut | None:
+    provider = getattr(recipe, "photo_credit_provider", None)
+    if not provider or not recipe.photo_path:
+        return None
+    return PhotoCreditOut(
+        provider=provider,
+        author=recipe.photo_credit_author,
+        author_url=recipe.photo_credit_author_url,
+        page_url=recipe.photo_credit_page_url,
+        license=recipe.photo_credit_license,
+    )
 
 
 def photo_url_for(recipe) -> str | None:
@@ -344,6 +360,7 @@ async def api_recipe_detail(
         is_favorite=recipe.id in favorite_ids,
         favorites_count=favorite_counts.get(recipe.id, 0),
         photo_url=photo_url_for(recipe),
+        photo_credit=photo_credit_for(recipe),
         custom_time_minutes=customization.custom_time_minutes if customization else None,
         source_url=recipe.source_url,
         personal_note=customization.personal_note if customization else None,
