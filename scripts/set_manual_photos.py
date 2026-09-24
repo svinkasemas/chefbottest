@@ -191,6 +191,12 @@ async def run() -> None:
             if db_recipe is not None:
                 db_recipe.photo_path = filename
                 db_recipe.photo_source = "source_page"
+                # Автор прежнего фото из фотобанка к новой картинке не относится.
+                db_recipe.photo_credit_provider = None
+                db_recipe.photo_credit_author = None
+                db_recipe.photo_credit_author_url = None
+                db_recipe.photo_credit_page_url = None
+                db_recipe.photo_credit_license = None
                 await session.commit()
 
         saved += 1
