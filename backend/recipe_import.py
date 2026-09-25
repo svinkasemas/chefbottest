@@ -25,17 +25,22 @@ from __future__ import annotations
 import html as html_module
 import logging
 import re
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import requests
 
 from backend.ai_recipe import RECIPE_SCHEMA_INSTRUCTIONS, RecipeGenerationError, _call_with_fallback
 from backend.config import PROXY_URL, TAVILY_API_KEY
+from backend.net_safety import DownloadError, UnsafeUrlError, looks_like_image, safe_get
 
 logger = logging.getLogger("recipe_import")
 
 REQUEST_TIMEOUT_SECONDS = 30
 MAX_PAGE_TEXT_CHARS = 9000
+# Ограничения на размер скачиваемого (защита от «бесконечных» файлов,
+# которыми можно положить сервер по памяти).
+MAX_PAGE_BYTES = 3 * 1024 * 1024
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 # Некоторые сайты (например povarenok.ru) блокируют запросы без обычного
 # браузерного User-Agent как заведомо ботов.
@@ -52,26 +57,66 @@ class RecipeImportError(Exception):
     pass
 
 
+# Украинские сайты не используются как источники рецептов - ни при поиске
+# (ежедневный сборщик, «Не нашли блюдо?» в Mini App), ни при импорте по
+# ссылке в боте. Все сайты в зоне .ua (включая .com.ua, .kiev.ua и т.п.)
+# отсекаются автоматически; украинские сайты на других доменах
+# перечисляются вручную в EXCLUDED_SOURCE_DOMAINS (поддомены учитываются).
+EXCLUDED_SOURCE_TLDS = (".ua", ".укр")
+EXCLUDED_SOURCE_DOMAINS = {
+    "klopotenko.com",
+    "obozrevatel.com",
+    "unian.net",
+    "glavred.net",
+    "novyny.live",
+}
+
+
+def is_excluded_source(url: str | None) -> bool:
+    host = (urlparse(url or "").hostname or "").lower().rstrip(".")
+    if not host:
+        return False
+    try:
+        host = host.encode("ascii").decode("idna")   # xn--j1amh -> укр
+    except Exception:
+        pass
+    if host.endswith(EXCLUDED_SOURCE_TLDS):
+        return True
+    return any(host == d or host.endswith("." + d) for d in EXCLUDED_SOURCE_DOMAINS)
+
+
 def _proxies(use_proxy: bool) -> dict | None:
     if use_proxy and PROXY_URL:
         return {"http": PROXY_URL, "https": PROXY_URL}
     return None
 
 
-def fetch_page_html(url: str) -> str:
-    """Прямое соединение, при неудаче - через прокси."""
-    errors: list[str] = []
-    for use_proxy in (False, True):
+def fetch_page_html(url: str) -> tuple[str, str]:
+    """
+    Скачивает страницу с проверками из backend/net_safety.py (только
+    публичные адреса, ограничение размера, контроль редиректов). Возвращает
+    (итоговый_url_после_редиректов, html). Текст ошибки для пользователя -
+    общий, без технических подробностей (они пишутся в лог).
+    """
+    try:
+        final_url, response, body = safe_get(
+            url, max_bytes=MAX_PAGE_BYTES, headers=HEADERS, timeout=REQUEST_TIMEOUT_SECONDS
+        )
+    except UnsafeUrlError as e:
+        raise RecipeImportError(str(e)) from e
+    except DownloadError as e:
+        raise RecipeImportError(f"Не удалось открыть страницу: {e}") from e
+    encoding = response.encoding
+    if not encoding or encoding.lower() == "iso-8859-1":
+        # requests ставит ISO-8859-1 по умолчанию, если сайт не указал
+        # кодировку - для русских сайтов это почти всегда неверно.
         try:
-            response = requests.get(
-                url, headers=HEADERS, timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy)
-            )
-            response.raise_for_status()
-            response.encoding = response.apparent_encoding or response.encoding
-            return response.text
-        except Exception as e:
-            errors.append(f"прокси={use_proxy}: {e}")
-    raise RecipeImportError(f"Не удалось скачать страницу {url}: " + "; ".join(errors))
+            import charset_normalizer
+            best = charset_normalizer.from_bytes(body).best()
+            encoding = best.encoding if best else "utf-8"
+        except Exception:
+            encoding = "utf-8"
+    return final_url, body.decode(encoding, errors="replace")
 
 
 def extract_og_image(html_text: str, page_url: str) -> str | None:
@@ -130,8 +175,13 @@ def import_recipe_from_url(url: str) -> tuple[dict, str | None]:
     не нашлось og:image (тогда фото для рецепта досоздастся как обычно,
     через ночную ИИ-генерацию по photo_prompt).
     """
-    html_text = fetch_page_html(url)
-    image_url = extract_og_image(html_text, url)
+    if is_excluded_source(url):
+        raise RecipeImportError("Рецепты с украинских сайтов не добавляются.")
+    final_url, html_text = fetch_page_html(url)
+    if is_excluded_source(final_url):
+        # Сайт мог перенаправить на украинский домен.
+        raise RecipeImportError("Рецепты с украинских сайтов не добавляются.")
+    image_url = extract_og_image(html_text, final_url)
     page_text = html_to_text(html_text)
 
     if len(page_text) < 200:
@@ -144,7 +194,10 @@ def import_recipe_from_url(url: str) -> tuple[dict, str | None]:
     try:
         data = _call_with_fallback(prompt, error_subject=f"импорт рецепта из {url}")
     except RecipeGenerationError as e:
-        raise RecipeImportError(str(e)) from e
+        # Подробности (какие ИИ-провайдеры и с какими ошибками) - только в
+        # лог, пользователю они ни к чему.
+        logger.warning("ИИ не смог обработать страницу %s: %s", url, e)
+        raise RecipeImportError("Сервис разбора рецептов сейчас недоступен, попробуйте позже.") from e
 
     if data.get("not_found"):
         raise RecipeImportError("На странице не удалось найти рецепт (не тот сайт или пустая страница).")
@@ -157,17 +210,20 @@ def import_recipe_from_url(url: str) -> tuple[dict, str | None]:
 
 
 def download_image_bytes(image_url: str) -> bytes:
-    errors: list[str] = []
-    for use_proxy in (False, True):
-        try:
-            response = requests.get(
-                image_url, headers=HEADERS, timeout=REQUEST_TIMEOUT_SECONDS, proxies=_proxies(use_proxy)
-            )
-            response.raise_for_status()
-            return response.content
-        except Exception as e:
-            errors.append(f"прокси={use_proxy}: {e}")
-    raise RecipeImportError(f"Не удалось скачать картинку {image_url}: " + "; ".join(errors))
+    """
+    Скачивает картинку (og:image страницы-источника) с теми же проверками,
+    что и страницу, и убеждается, что это действительно изображение - иначе
+    по «картинке» можно было бы сохранить и раздать всем что угодно.
+    """
+    try:
+        _, _, body = safe_get(
+            image_url, max_bytes=MAX_IMAGE_BYTES, headers=HEADERS, timeout=REQUEST_TIMEOUT_SECONDS
+        )
+    except (UnsafeUrlError, DownloadError) as e:
+        raise RecipeImportError(f"Не удалось скачать картинку: {e}") from e
+    if not looks_like_image(body):
+        raise RecipeImportError("По ссылке на картинку пришла не картинка")
+    return body
 
 
 # Сайты, которые не отдают полезный текст рецепта (видео, соцсети) -
@@ -195,8 +251,9 @@ def search_recipe_url(dish_name: str) -> str | None:
     payload = {
         "query": f"рецепт {dish_name}",
         "search_depth": "basic",
-        "max_results": 5,
-        "exclude_domains": _SEARCH_EXCLUDED_DOMAINS,
+        # С запасом: часть результатов может отсеяться как украинские сайты.
+        "max_results": 8,
+        "exclude_domains": _SEARCH_EXCLUDED_DOMAINS + sorted(EXCLUDED_SOURCE_DOMAINS),
     }
 
     for use_proxy in (False, True):
@@ -207,8 +264,13 @@ def search_recipe_url(dish_name: str) -> str | None:
             )
             response.raise_for_status()
             for result in response.json().get("results", []):
-                if result.get("url"):
-                    return result["url"]
+                result_url = result.get("url")
+                if not result_url:
+                    continue
+                if is_excluded_source(result_url):
+                    logger.info("Пропускаю украинский источник для «%s»: %s", dish_name, result_url)
+                    continue
+                return result_url
             return None
         except Exception as e:
             logger.warning("Поиск рецепта «%s» через Tavily не удался (прокси=%s): %s", dish_name, use_proxy, e)

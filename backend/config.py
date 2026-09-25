@@ -11,7 +11,12 @@ from pathlib import Path
 BASE_DIR = Path(__file__).resolve().parent.parent  # корень проекта RecipeApp/
 
 # --- Telegram ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "PUT_YOUR_TOKEN_HERE")
+# Без значения по умолчанию: токен - ключ, которым проверяется подпись
+# initData Mini App (backend/auth.py). Раньше здесь стояла заглушка
+# "PUT_YOUR_TOKEN_HERE" - если бэкенд запускался без .env, подпись
+# проверялась общеизвестным ключом и её мог подделать кто угодно. Теперь
+# бэкенд и бот без токена просто не запускаются (см. check_required_secrets).
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_IDS = [int(x) for x in os.getenv("ADMIN_IDS", "").split(",") if x.strip().isdigit()]
 # Юзернейм бота без @ (например eattomeat_bot) - нужен для диплинков вида
 # t.me/USERNAME?startapp=recipe_42, см. GET /api/config в backend/main.py
@@ -88,3 +93,9 @@ CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
 
 DEFAULT_PORTIONS = 4
 PORTIONS_OPTIONS = [2, 4, 6, 8]
+
+
+def check_required_secrets() -> None:
+    """Вызывается при старте бэкенда и бота - падаем сразу, а не работаем небезопасно."""
+    if not BOT_TOKEN or BOT_TOKEN == "PUT_YOUR_TOKEN_HERE" or ":" not in BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN не задан или некорректен. Заполните .env на основе .env.example.")

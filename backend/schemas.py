@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from typing import Annotated
+
+from pydantic import BaseModel, Field
+
+# Ограничения на размер входных данных: без них можно было прислать заметку
+# на мегабайты или «холодильник» из 100 000 продуктов и раздуть базу или
+# нагрузить сервер. FastAPI сам отвечает 422 на слишком длинные значения.
+ShortText = Annotated[str, Field(max_length=100)]      # названия блюд и продуктов
+TinyText = Annotated[str, Field(max_length=30)]        # единицы измерения, платформа, коды
+StepNote = Annotated[str, Field(max_length=500)]
 
 
 
@@ -90,9 +99,9 @@ class RecipeCustomizationIn(BaseModel):
     редакторе (см. PUT /api/recipes/{id}/customize). step_notes - словарь
     {номер_шага_строкой: текст_заметки}, пустые заметки можно не включать.
     """
-    time_minutes: int | None = None
-    step_notes: dict[str, str] = {}
-    platform: str | None = None
+    time_minutes: int | None = Field(default=None, ge=0, le=100_000)
+    step_notes: dict[TinyText, StepNote] = Field(default={}, max_length=100)
+    platform: TinyText | None = None
 
 
 class CookIn(BaseModel):
@@ -120,7 +129,7 @@ class ShoppingItemOut(BaseModel):
 
 
 class JoinShoppingGroupIn(BaseModel):
-    invite_code: str
+    invite_code: TinyText
 
 
 class ToggleFavoriteIn(BaseModel):
@@ -128,30 +137,30 @@ class ToggleFavoriteIn(BaseModel):
 
 
 class GenerateRecipeIn(BaseModel):
-    name: str
+    name: ShortText
     # Платформа Telegram-клиента (tg.platform на фронтенде) - для ачивки
     # "Удалённый доступ" за работу с десктопа, см. backend/achievements.py.
-    platform: str | None = None
+    platform: TinyText | None = None
 
 
 class FridgeMatchIn(BaseModel):
-    ingredients: list[str]
+    ingredients: list[ShortText] = Field(max_length=50)
 
 
 class AddToShoppingListIn(BaseModel):
     recipe_id: int
-    portions: int
+    portions: int = Field(ge=1, le=100)
 
 
 class AddCustomShoppingItemIn(BaseModel):
-    name: str
-    amount: float = 0
-    unit: str = ""
+    name: ShortText
+    amount: float = Field(default=0, ge=0, le=1_000_000)
+    unit: TinyText = ""
 
 
 class RecipeNoteIn(BaseModel):
     """Тело запроса POST /api/recipes/{id}/note - свободная личная заметка."""
-    note: str = ""
+    note: str = Field(default="", max_length=2000)
 
 
 class DietaryOptionOut(BaseModel):
@@ -166,5 +175,5 @@ class DietarySettingsOut(BaseModel):
 
 
 class DietarySettingsIn(BaseModel):
-    keys: list[str] = []
-    custom: list[str] = []
+    keys: list[TinyText] = Field(default=[], max_length=30)
+    custom: list[Annotated[str, Field(max_length=50)]] = Field(default=[], max_length=50)

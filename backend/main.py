@@ -17,13 +17,15 @@ import asyncio
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.auth import TelegramUser, get_current_user
-from backend.config import BOT_USERNAME, CORS_ORIGINS, PHOTOS_DIR, WEBAPP_DIR
+from backend.admin_notify import notify_admins_new_recipe
+from backend.config import BOT_USERNAME, CORS_ORIGINS, DEV_MODE, PHOTOS_DIR, WEBAPP_DIR, check_required_secrets
+from backend.rate_limit import NEW_RECIPE_LIMITS, RateLimiter, format_wait
 from backend.database import crud
 from backend.database.db import get_db, init_db
 from backend.database.photo_credit_migration import ensure_photo_credit_columns
@@ -60,6 +62,11 @@ from backend.seasonal import current_season
 
 logger = logging.getLogger("chefbot.main")
 
+# Лимит на добавление новых рецептов через поиск незнакомого блюда - см.
+# backend/rate_limit.py. Считаются только реальные генерации: если похожий
+# рецепт уже есть в базе, попытка не тратится.
+new_recipe_limiter = RateLimiter(NEW_RECIPE_LIMITS)
+
 # Небольшой предустановленный список продуктов для быстрого выбора в
 # разделе "Мой холодильник" на фронтенде (полный поиск по любому продукту
 # доступен через /api/search).
@@ -73,6 +80,12 @@ COMMON_INGREDIENTS = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    check_required_secrets()
+    if DEV_MODE:
+        logger.warning(
+            "!!! DEV_MODE=true: запросы без подписи Telegram принимаются как пользователь id=1. "
+            "На боевом сервере в .env должно быть DEV_MODE=false !!!"
+        )
     await init_db()
     await ensure_photo_credit_columns()
     yield
@@ -453,7 +466,7 @@ async def api_delete_recipe_customization(
 
 @app.get("/api/search", response_model=list[RecipeShort])
 async def api_search(
-    q: str,
+    q: str = Query(max_length=100),
     db: AsyncSession = Depends(get_db),
     user: TelegramUser = Depends(get_current_user),
 ):
@@ -487,6 +500,12 @@ async def api_generate_recipe(
         favorite_counts = await crud.get_favorite_counts(db, [similar.id])
         return recipe_to_short(similar, favorite_ids, db_user.dietary_restrictions, db_user.custom_allergens, favorite_counts)
 
+    wait = new_recipe_limiter.check(user.telegram_id)
+    if wait is not None:
+        raise HTTPException(
+            429, f"Слишком много новых рецептов подряд. Попробуйте через {format_wait(wait)}."
+        )
+
     data: dict | None = None
     source_url: str | None = None
 
@@ -508,11 +527,22 @@ async def api_generate_recipe(
         try:
             data = await asyncio.to_thread(generate_recipe_dict, dish_name)
         except RecipeGenerationError as e:
-            raise HTTPException(502, str(e))
+            # Подробности (какие провайдеры, какие ошибки) - только в лог.
+            logger.warning("Не удалось сгенерировать рецепт «%s»: %s", dish_name, e)
+            raise HTTPException(502, "Не удалось подготовить рецепт, попробуйте позже.")
 
+    # ИИ мог назвать блюдо иначе, чем пользователь, и такое название уже
+    # может быть в базе - тогда create_recipe_from_ai_data вернёт
+    # существующий рецепт, и уведомлять админов не о чем.
+    already_existed = await crud.find_similar_active_recipe(db, data["name"]) is not None
     recipe = await crud.create_recipe_from_ai_data(
         db, data, source_url=source_url, added_by_user_id=db_user.id
     )
+    if not user.is_admin and not already_existed:
+        who = f"@{user.username}" if user.username else (user.full_name or f"id{user.telegram_id}")
+        asyncio.create_task(asyncio.to_thread(
+            notify_admins_new_recipe, recipe.id, recipe.name, who, "поиск блюда в Mini App", recipe.source_url,
+        ))
     if payload.platform in DESKTOP_PLATFORMS:
         await unlock_instant(db, db_user.id, "remote_access")
     await check_and_unlock(db, db_user.id)
@@ -530,7 +560,7 @@ async def api_common_ingredients():
 
 
 @app.get("/api/ingredients/search")
-async def api_search_ingredients(q: str, db: AsyncSession = Depends(get_db)):
+async def api_search_ingredients(q: str = Query(max_length=100), db: AsyncSession = Depends(get_db)):
     q = q.strip()
     if not q:
         return {"ingredients": []}
