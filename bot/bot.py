@@ -30,6 +30,7 @@ from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     BufferedInputFile,
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InlineQuery,
@@ -44,7 +45,12 @@ from sqlalchemy import select
 
 load_dotenv()
 
-from backend.config import ADMIN_IDS, BOT_TOKEN, BOT_USERNAME, PHOTOS_DIR, PROXY_URL  # noqa: E402
+from backend.config import (  # noqa: E402
+    ADMIN_IDS, BOT_TOKEN, BOT_USERNAME, PHOTOS_DIR, PROXY_URL, check_required_secrets,
+)
+from backend.admin_notify import moderation_keyboard, moderation_text  # noqa: E402
+from backend.net_safety import is_safe_display_url  # noqa: E402
+from backend.rate_limit import NEW_RECIPE_LIMITS, RateLimiter, format_wait  # noqa: E402
 from backend.database import crud  # noqa: E402
 from backend.database.db import async_session, init_db  # noqa: E402
 from backend.database.models import Favorite, Recipe, RecipeIngredient, RecipeStep, User  # noqa: E402
@@ -58,7 +64,7 @@ WEBAPP_URL = os.getenv("WEBAPP_URL", "").strip()
 # клиент) агрессивно кэширует саму страницу Mini App по её URL; изменение
 # URL - самый надёжный способ заставить его загрузить свежую версию, не
 # полагаясь на HTTP-кэш и не прося пользователей вручную чистить кэш.
-WEBAPP_VERSION = "18"
+WEBAPP_VERSION = "19"
 
 
 def _webapp_url() -> str:
@@ -81,6 +87,24 @@ dp = Dispatcher(storage=MemoryStorage())
 
 def is_admin(user_id: int) -> bool:
     return user_id in ADMIN_IDS
+
+
+# Лимит на импорт рецептов по ссылке - см. backend/rate_limit.py.
+new_recipe_limiter = RateLimiter(NEW_RECIPE_LIMITS)
+
+
+async def notify_admins_new_recipe(recipe_id: int, recipe_name: str, who: str, how: str, source_url: str | None) -> None:
+    """Сообщение админам о новом пользовательском рецепте с кнопкой «Скрыть»."""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=btn["text"], callback_data=btn["callback_data"])
+        for btn in moderation_keyboard(recipe_id)["inline_keyboard"][0]
+    ]])
+    text = moderation_text(recipe_id, recipe_name, who, how, source_url)
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(admin_id, text, reply_markup=keyboard, disable_web_page_preview=True)
+        except Exception as e:
+            logger.warning("Не удалось уведомить админа %s о рецепте #%d: %s", admin_id, recipe_id, e)
 
 
 def open_app_kb() -> InlineKeyboardMarkup:
@@ -427,7 +451,7 @@ async def send_recipes_list(message: Message):
         await message.answer("Рецептов пока нет.")
         return
 
-    lines = [f"#{r.id} {'✅' if r.is_active else '🚫'} {r.name}" for r in recipes]
+    lines = [f"#{r.id} {'✅' if r.is_active else '🚫'} {html.escape(r.name)}" for r in recipes]
     chunk_size = 60
     for i in range(0, len(lines), chunk_size):
         await message.answer("\n".join(lines[i : i + chunk_size]))
@@ -453,6 +477,34 @@ async def delete_recipe_cmd(message: Message):
         await session.commit()
 
     await message.answer(f"Рецепт «{html.escape(recipe.name)}» скрыт из приложения.")
+
+
+@dp.callback_query(F.data.startswith("hide_recipe:"))
+async def hide_recipe_callback(callback: CallbackQuery):
+    """Кнопка «🚫 Скрыть» в уведомлении о новом пользовательском рецепте."""
+    if not is_admin(callback.from_user.id):
+        await callback.answer()
+        return
+    raw_id = callback.data.split(":", 1)[1]
+    if not raw_id.isdigit():
+        await callback.answer("Некорректный id", show_alert=True)
+        return
+    async with async_session() as session:
+        recipe = await session.get(Recipe, int(raw_id))
+        if recipe is None:
+            await callback.answer("Рецепт не найден", show_alert=True)
+            return
+        recipe.is_active = False
+        await session.commit()
+        name = recipe.name
+    await callback.answer("Скрыт")
+    try:
+        await callback.message.edit_text(
+            f"{callback.message.html_text}\n\n🚫 Скрыт ({html.escape(callback.from_user.full_name)})",
+            disable_web_page_preview=True,
+        )
+    except Exception:
+        await callback.message.answer(f"🚫 Рецепт «{html.escape(name)}» скрыт.")
 
 
 @dp.message(Command("broadcast"))
@@ -556,16 +608,29 @@ async def try_add_recipe_from_url(message: Message):
     от ботов), тогда импорт с них не сработает.
     """
     url = message.text.strip()
+    # Ссылка потом показывается всем пользователям как «Источник» - только
+    # нормальные http(s)-ссылки без кавычек и т.п. (см. net_safety).
+    if not is_safe_display_url(url):
+        await message.answer("Не похоже на обычную ссылку на страницу с рецептом. Проверьте её и пришлите ещё раз.")
+        return
+
+    wait = new_recipe_limiter.check(message.from_user.id)
+    if wait is not None:
+        await message.answer(f"⏳ Слишком много ссылок подряд. Попробуйте через {format_wait(wait)}.")
+        return
+
     status = await message.answer("🔎 Открываю страницу и извлекаю рецепт... это может занять до минуты.")
 
     try:
         data, image_url = await asyncio.to_thread(import_recipe_from_url, url)
     except RecipeImportError as e:
-        await status.edit_text(f"Не удалось импортировать рецепт: {e}")
+        # Тексты RecipeImportError написаны для пользователя, но на всякий
+        # случай экранируем - сообщение отправляется в режиме HTML.
+        await status.edit_text(f"Не удалось импортировать рецепт: {html.escape(str(e))}")
         return
-    except Exception as e:
+    except Exception:
         logger.exception("Ошибка импорта рецепта по ссылке %s", url)
-        await status.edit_text(f"Не удалось импортировать рецепт: {e}")
+        await status.edit_text("Не удалось импортировать рецепт: внутренняя ошибка, попробуйте позже.")
         return
 
     async with async_session() as session:
@@ -582,6 +647,12 @@ async def try_add_recipe_from_url(message: Message):
             f"Похожий рецепт «{html.escape(recipe.name)}» уже есть в базе (id {recipe.id}) — новый не создавал."
         )
         return
+
+    if not is_admin(message.from_user.id):
+        who = f"@{message.from_user.username}" if message.from_user.username else (
+            message.from_user.full_name or f"id{message.from_user.id}"
+        )
+        await notify_admins_new_recipe(recipe.id, recipe.name, who, "импорт по ссылке в боте", recipe.source_url)
 
     photo_note = "фото появится при следующем ежедневном подборе фото"
     if image_url:
@@ -620,8 +691,7 @@ async def try_add_recipe_from_url(message: Message):
 # ---------------------------------------------------------------------------
 
 async def main() -> None:
-    if not BOT_TOKEN or BOT_TOKEN == "PUT_YOUR_TOKEN_HERE":
-        raise RuntimeError("BOT_TOKEN не задан. Заполните .env на основе .env.example.")
+    check_required_secrets()
 
     await init_db()
 
