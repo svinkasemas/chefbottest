@@ -67,6 +67,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import asyncio
 import logging
 
@@ -158,6 +159,7 @@ async def collect(count: int) -> dict:
         return {"added": [], "skipped": [], "no_source": [], "failed": [], "error": None}
 
     added: list[str] = []
+    added_ids: list[int] = []
     skipped: list[tuple[str, str]] = []
     no_source: list[str] = []
     failed: list[str] = []
@@ -182,9 +184,32 @@ async def collect(count: int) -> dict:
         else:
             seen_ids.add(recipe.id)
             added.append(recipe.name)
+            added_ids.append(recipe.id)
             logger.info("Добавлен рецепт (по ссылке): %s", recipe.name)
 
-    return {"added": added, "skipped": skipped, "no_source": no_source, "failed": failed, "error": None}
+    return {
+        "added": added, "added_ids": added_ids, "skipped": skipped,
+        "no_source": no_source, "failed": failed, "error": None,
+    }
+
+
+async def add_photos(recipe_ids: list[int]) -> dict | None:
+    """
+    Подбирает фото только что добавленным рецептам - сразу, а не при
+    следующем запуске ежедневного таймера фото (раньше они могли разминуться:
+    если таймер фото срабатывал раньше сборщика, новые рецепты весь день
+    оставались без фото). Та же логика, что у обычного ежедневного запуска
+    scripts/generate_recipe_images.py. Ошибка здесь не должна мешать сводке.
+    """
+    if not recipe_ids:
+        return None
+    from scripts.generate_recipe_images import main as generate_images
+
+    try:
+        return await generate_images(replace_all=False, only_ids=set(recipe_ids))
+    except Exception:
+        logger.exception("Не удалось подобрать фото для новых рецептов %s", recipe_ids)
+        return {"error": True}
 
 
 async def notify_admins(result: dict) -> None:
@@ -194,18 +219,27 @@ async def notify_admins(result: dict) -> None:
 
     lines = ["🌱 <b>Ежедневный сбор рецептов</b>"]
     if result.get("error"):
-        lines.append(f"⚠️ Не удалось получить предложения от ИИ: {result['error']}")
+        lines.append(f"⚠️ Не удалось получить предложения от ИИ: {html.escape(str(result['error']))[:300]}")
     else:
         lines.append(f"✅ Добавлено: {len(result['added'])}")
         if result["added"]:
-            lines.append("• " + "\n• ".join(result["added"]))
+            lines.append("• " + "\n• ".join(html.escape(n) for n in result["added"]))
+        photos = result.get("photos")
+        if photos and photos.get("error"):
+            lines.append("🖼 Фото подобрать не удалось - смотрите журнал chefbot-daily-recipes")
+        elif photos:
+            got = photos["verified"] + photos["unverified"] + photos["ai"]
+            lines.append(
+                f"🖼 Фото: {got} из {len(result['added'])}"
+                f" (проверено {photos['verified']}, без проверки {photos['unverified']}, ИИ {photos['ai']})"
+            )
         if result["skipped"]:
-            skipped_names = ", ".join(f"«{dish}»→«{existing}»" for dish, existing in result["skipped"])
+            skipped_names = ", ".join(f"«{html.escape(dish)}»→«{html.escape(existing)}»" for dish, existing in result["skipped"])
             lines.append(f"⏭ Пропущено как дубли ({len(result['skipped'])}): {skipped_names}")
         if result.get("no_source"):
-            lines.append(f"🔍 Не нашлось страницы с рецептом ({len(result['no_source'])}): {', '.join(result['no_source'])}")
+            lines.append(f"🔍 Не нашлось страницы с рецептом ({len(result['no_source'])}): {html.escape(', '.join(result['no_source']))}")
         if result["failed"]:
-            lines.append(f"❌ Не удалось добавить ({len(result['failed'])}): {', '.join(result['failed'])}")
+            lines.append(f"❌ Не удалось добавить ({len(result['failed'])}): {html.escape(', '.join(result['failed']))}")
 
     text = "\n".join(lines)
 
@@ -234,6 +268,7 @@ async def notify_admins(result: dict) -> None:
 
 async def main(count: int) -> None:
     result = await collect(count)
+    result["photos"] = await add_photos(result.get("added_ids", []))
     await notify_admins(result)
     logger.info(
         "Готово: добавлено %d, дублей %d, без источника %d, ошибок %d",

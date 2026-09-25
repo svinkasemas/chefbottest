@@ -180,7 +180,8 @@ async def main(
     allow_ai: bool = True,
     preview_dir: Path | None = None,
     only_ids: set[int] | None = None,
-) -> None:
+) -> dict:
+    """Возвращает счётчики {"verified", "unverified", "ai", "skipped"} - для сводки админам."""
     await init_db()
     await ensure_photo_credit_columns()
     if allow_unverified is None:
@@ -200,7 +201,7 @@ async def main(
 
     if not recipes:
         logger.info("Обрабатывать нечего - подходящих рецептов не нашлось (с учётом фильтров).")
-        return
+        return {"verified": 0, "unverified": 0, "ai": 0, "skipped": 0}
 
     if limit is not None:
         recipes = recipes[:limit]
@@ -285,6 +286,7 @@ async def main(
         logger.info("Стоит проверить вручную (scripts/set_manual_photos.py):\n  %s", "\n  ".join(needs_review))
     if preview_dir is not None:
         logger.info("Предпросмотр: %s", preview_dir / "index.html")
+    return counts
 
 
 if __name__ == "__main__":
