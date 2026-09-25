@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+import logging
 import secrets
 
 from backend.database.models import (
@@ -25,6 +26,9 @@ from backend.database.models import (
     ShoppingListItem,
     User,
 )
+from backend.net_safety import is_safe_display_url
+
+logger = logging.getLogger("crud")
 
 
 async def get_or_create_user(session: AsyncSession, telegram_id: int, username: str | None, full_name: str | None) -> User:
@@ -178,6 +182,14 @@ async def create_recipe_from_ai_data(
     similar = await find_similar_active_recipe(session, data["name"])
     if similar is not None:
         return similar
+
+    # source_url показывается всем пользователям как ссылка «Источник» -
+    # сохраняем только нормальные http(s)-ссылки без кавычек и прочих
+    # символов, которыми можно «вырваться» из атрибута href (см.
+    # is_safe_display_url в backend/net_safety.py).
+    if source_url is not None and not is_safe_display_url(source_url):
+        logger.warning("Отбрасываю небезопасный source_url для «%s»: %r", data["name"], source_url[:200])
+        source_url = None
 
     category_name = CATEGORY_KEY_TO_NAME.get(data.get("category"), "Вторые блюда")
     category = await get_or_create_category(session, category_name, created_by_user_id=added_by_user_id)
