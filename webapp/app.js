@@ -36,8 +36,9 @@ function openExternal(url) {
 
 function extLink(url, text) {
   const safeText = escapeHtml(text);
-  if (!url || !/^https?:\/\//i.test(url)) return safeText;
-  return `<a href="${escapeHtml(url)}" data-ext-link rel="noopener">${safeText}</a>`;
+  const href = safeUrl(url);
+  if (!href) return safeText;
+  return `<a href="${escapeHtml(href)}" data-ext-link rel="noopener">${safeText}</a>`;
 }
 
 function photoCreditHtml(credit) {
@@ -191,7 +192,15 @@ async function api(path, { method = "GET", body } = {}) {
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(`API ${path} -> ${res.status}: ${text}`);
+    const error = new Error(`API ${path} -> ${res.status}: ${text}`);
+    error.status = res.status;
+    // Текст ошибки для пользователя из ответа FastAPI ({"detail": "..."}),
+    // если он строка (у 422 detail - список технических ошибок валидации).
+    try {
+      const detail = JSON.parse(text).detail;
+      if (typeof detail === "string") error.detail = detail;
+    } catch (e) {}
+    throw error;
   }
   if (res.status === 204) return null;
   return res.json();
@@ -286,10 +295,25 @@ function showError(err) {
 }
 
 // ------------------------------------------------------------------ Утилиты
+// Экранирует и текст, и значения атрибутов. Прежняя версия (через
+// div.textContent -> innerHTML) не экранировала кавычки, и ссылка вида
+// https://site/r?a"/onclick="..." из поля source_url «вырывалась» из
+// атрибута href и выполняла чужой код в Mini App.
+const HTML_ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;", "`": "&#96;" };
 function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
+  return String(str ?? "").replace(/[&<>"'`]/g, (c) => HTML_ESCAPES[c]);
+}
+
+// Ссылку можно подставлять в href/src, только если это http(s) -
+// javascript:, data: и прочие схемы отбрасываются.
+function safeUrl(url) {
+  if (!url) return "";
+  try {
+    const parsed = new URL(url, window.location.href);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.href : "";
+  } catch (e) {
+    return "";
+  }
 }
 
 function formatAmount(v) {
@@ -665,7 +689,9 @@ const SCREENS = {
             haptic("success");
             render("recipe", { id: recipe.id });
           } catch (e) {
-            flashToast("Не удалось сгенерировать рецепт 😕 Попробуйте ещё раз");
+            flashToast(
+              e.status === 429 && e.detail ? `⏳ ${e.detail}` : "Не удалось сгенерировать рецепт 😕 Попробуйте ещё раз"
+            );
             generateBtn.disabled = false;
             generateBtn.textContent = "📖 Получить рецепт";
           }
@@ -871,10 +897,10 @@ const SCREENS = {
       document.getElementById("recipe-description").textContent = recipe.description || "";
 
       const sourceEl = document.getElementById("recipe-source");
-      if (recipe.source_url) {
-        let domain = recipe.source_url;
-        try { domain = new URL(recipe.source_url).hostname.replace(/^www\./, ""); } catch (e) {}
-        sourceEl.innerHTML = `Источник: <a href="${escapeHtml(recipe.source_url)}" target="_blank" rel="noopener">${escapeHtml(domain)}</a>`;
+      const sourceHref = safeUrl(recipe.source_url);
+      if (sourceHref) {
+        const domain = new URL(sourceHref).hostname.replace(/^www\./, "");
+        sourceEl.innerHTML = `Источник: <a href="${escapeHtml(sourceHref)}" target="_blank" rel="noopener noreferrer">${escapeHtml(domain)}</a>`;
         sourceEl.hidden = false;
       } else {
         sourceEl.hidden = true;
@@ -986,7 +1012,7 @@ const SCREENS = {
         (step) => `
       <div class="edit-step-row">
         <p class="edit-step-original"><b>Шаг ${step.step_number}.</b> ${escapeHtml(step.text)}</p>
-        <textarea class="edit-step-note-input" data-step-number="${step.step_number}"
+        <textarea class="edit-step-note-input" data-step-number="${step.step_number}" maxlength="500"
           placeholder="Например: добавить лимон">${escapeHtml(step.note || "")}</textarea>
       </div>`
       )

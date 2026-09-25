@@ -84,7 +84,7 @@
       <h1>Поиск</h1>
     </header>
     <div class="search-input-wrap">
-      <input id="search-input" class="search-input" type="text" inputmode="search"
+      <input id="search-input" maxlength="100" class="search-input" type="text" inputmode="search"
              placeholder="Например: борщ, курица, до 30 минут" />
     </div>
     <div class="recipe-list" id="search-results"></div>
@@ -105,7 +105,7 @@
     <div class="chip-grid" id="fridge-chips"></div>
 
     <div class="search-input-wrap">
-      <input id="fridge-search-input" class="search-input" type="text" inputmode="search"
+      <input id="fridge-search-input" maxlength="100" class="search-input" type="text" inputmode="search"
              placeholder="Другой продукт…" />
     </div>
     <div class="chip-grid" id="fridge-search-results"></div>
@@ -139,7 +139,7 @@
     <ul class="ingredient-list" id="ingredient-list"></ul>
 
     <h2 class="section-title">Мои заметки</h2>
-    <textarea class="recipe-note-textarea" id="recipe-note-input"
+    <textarea class="recipe-note-textarea" id="recipe-note-input" maxlength="2000"
               placeholder="Например: готовил 12 октября, жене понравилось, в следующий раз добавить больше чеснока"></textarea>
     <button class="btn btn--ghost" id="recipe-note-save-btn" style="margin-top:8px">💾 Сохранить заметку</button>
 
@@ -196,7 +196,7 @@
     <h2 class="section-title">Свои аллергены</h2>
     <p class="hint-text">Впишите любой продукт, которого нет в списке выше — например «кинза».</p>
     <div class="custom-allergen-row">
-      <input id="custom-allergen-input" class="custom-allergen-input" type="text" placeholder="Например: кинза" />
+      <input id="custom-allergen-input" maxlength="50" class="custom-allergen-input" type="text" placeholder="Например: кинза" />
       <button class="btn btn--ghost" id="custom-allergen-add-btn">Добавить</button>
     </div>
     <div class="chip-grid" id="custom-allergen-chips"></div>
@@ -211,8 +211,8 @@
     <p class="shopping-shared-info" id="shopping-shared-info" hidden></p>
 
     <div class="shopping-add-row">
-      <input id="shopping-add-name" class="shopping-add-name" type="text" placeholder="Продукт, например: соль" />
-      <input id="shopping-add-qty" class="shopping-add-qty" type="text" placeholder="Кол-во" />
+      <input id="shopping-add-name" maxlength="100" class="shopping-add-name" type="text" placeholder="Продукт, например: соль" />
+      <input id="shopping-add-qty" maxlength="20" class="shopping-add-qty" type="text" placeholder="Кол-во" />
     </div>
     <div class="shopping-add-buttons">
       <button class="btn btn--ghost" id="shopping-add-item-btn">➕ Продукт</button>
@@ -225,6 +225,6 @@
     <button class="btn btn--ghost btn--block" id="clear-checked-btn">🗑 Очистить купленное</button>
   </template>
 
-  <script src="app.js?v=21"></script>
+  <script src="app.js?v=22"></script>
 </body>
 </html>
